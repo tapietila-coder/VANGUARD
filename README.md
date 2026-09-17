@@ -27,6 +27,12 @@ See `VANGUARD_DISCOVERY.md` for the Mission-0 discovery pass this build is based
   (`vanguard/mesh/provider.py`), with a `NullMeshProvider` (the honest default —
   reports `NOT_CONNECTED`, never fake peers) and a `NetBirdMeshProvider` contract
   implementation that has never been run against a live server.
+- A minimal Next.js UI (`ui/`) — Overview, Nodes (+ per-node detail with
+  readiness evaluation), Mesh, Services (+ resolve-by-name), and Readiness
+  pages, all reading real data from the routes below with an honest
+  "API unreachable" state and no fabricated values. No login UI (read-only
+  routes need none locally), no write actions from the dashboard, no cloud
+  deployment — see `ui/README.md` for how to run it and what's still missing.
 - Stub adapters for Steward/Watchtower/Marshal that always report
   `NOT_CONNECTED` (`vanguard/integrations/adapters.py`), because none of those
   systems exist anywhere in this environment (verified by repo search — see
@@ -40,8 +46,8 @@ See `VANGUARD_DISCOVERY.md` for the Mission-0 discovery pass this build is based
 
 ## What is NOT implemented / not claimed
 
-- **No UI or dashboard.** No VANGUARD/RANGER preservation work, no D27HQ nav
-  integration. Explicitly deferred — see "Follow-up" below.
+- **No D27HQ nav integration** for the new `ui/` dashboard, and no
+  VANGUARD/RANGER preservation work bundled with it.
 - **No real NetBird deployment.** No mesh is installed anywhere; `NullMeshProvider`
   is what actually runs by default. `NetBirdMeshProvider` is a written contract,
   untested against a live server.
@@ -124,12 +130,15 @@ GET    /api/v1/vanguard/audit
 
 ## Follow-up (explicitly out of scope for this pass)
 
-1. UI/dashboard for nodes, readiness, mesh status, and service map.
-2. Real NetBird deployment (pinned to `v0.78.2`, never `latest` — see
+1. Real NetBird deployment (pinned to `v0.78.2`, never `latest` — see
    `docs/MESH.md`) once the user authorizes touching real infrastructure.
-3. Real Steward/Marshal/Watchtower integrations once those systems exist.
-4. Remote node enrollment (Windows/GPU workers beyond the local machine).
-5. Multi-node storage (Postgres) if VANGUARD ever needs to run distributed.
+2. Real Steward/Marshal/Watchtower integrations once those systems exist.
+3. Remote node enrollment (Windows/GPU workers beyond the local machine).
+4. Multi-node storage (Postgres) if VANGUARD ever needs to run distributed.
+5. UI follow-up: no login/token UI, no write/mutating actions from the
+   dashboard, no cloud deployment of `ui/`, and no D27HQ-wide nav shell
+   integration — see `ui/README.md` for the current page set and what it
+   deliberately does not do.
 
 ## Safety and compatibility
 
