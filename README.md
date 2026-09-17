@@ -1,5 +1,7 @@
 # VANGUARD — D27HQ Infrastructure & Operational Readiness Directorate
 
+[![tests](https://github.com/tapietila-coder/VANGUARD/actions/workflows/tests.yml/badge.svg)](https://github.com/tapietila-coder/VANGUARD/actions/workflows/tests.yml)
+
 **Status:** local reference build, September 17, 2026. Not deployed anywhere. Not production-certified.
 
 VANGUARD tracks what infrastructure D27HQ actually has (nodes, services), how
