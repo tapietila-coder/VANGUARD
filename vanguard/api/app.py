@@ -1,0 +1,200 @@
+"""FastAPI app. Read-only routes are unauthenticated (documented dev-only posture,
+matching Dispatch's local-token pattern); mutating routes require a bearer token."""
+import hmac
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, Header, HTTPException
+
+from ..audit.writer import AuditWriter
+from ..core.config import Settings
+from ..core.db import Database
+from ..core.models import (
+    AuditEntry,
+    NodeRegister,
+    ServiceRegister,
+)
+from ..integrations.adapters import DispatchAdapter, MarshalAdapter, StewardAdapter, WatchtowerAdapter
+from ..mesh.provider import build_mesh_provider
+from ..nodeops.inventory import NodeInventory
+from ..readiness.engine import ReadinessStore, evaluate
+from ..readiness.profiles import BUILTIN_PROFILES
+from ..service_map.registry import ServiceRegistry, resolveService
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    cfg = settings or Settings.from_env()
+    cfg.validate()
+    db = Database(cfg.db_path)
+    nodes = NodeInventory(db, stale_after_seconds=cfg.node_stale_after_seconds)
+    services = ServiceRegistry(db)
+    readiness_store = ReadinessStore(db)
+    audit = AuditWriter(db)
+    mesh = build_mesh_provider(cfg)
+    dispatch_adapter = DispatchAdapter(cfg.dispatch_base_url)
+    steward_adapter = StewardAdapter()
+    watchtower_adapter = WatchtowerAdapter()
+    marshal_adapter = MarshalAdapter()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+        db.close()
+
+    app = FastAPI(
+        title="VANGUARD",
+        version="0.1.0",
+        lifespan=lifespan,
+        description="D27HQ Infrastructure & Operational Readiness Directorate — local reference service.",
+    )
+    app.state.db = db
+    app.state.nodes = nodes
+    app.state.services = services
+    app.state.mesh = mesh
+
+    def operator(authorization: str | None = Header(default=None)):
+        if not authorization or not authorization.startswith("Bearer ") or not hmac.compare_digest(
+            authorization[7:], cfg.api_token
+        ):
+            raise HTTPException(status_code=401, detail="Operator bearer token required")
+
+    # ---------------------------------------------------------------- health
+    @app.get("/api/v1/vanguard/health")
+    def health():
+        return {"status": "ok", "mode": "single-node-local", "environment": cfg.environment}
+
+    # ---------------------------------------------------------------- nodes
+    @app.get("/api/v1/vanguard/nodes")
+    def list_nodes():
+        return [n.model_dump() for n in nodes.list()]
+
+    @app.post("/api/v1/vanguard/nodes", dependencies=[Depends(operator)], status_code=201)
+    def register_node(body: NodeRegister):
+        before = nodes.get(body.node_id)
+        node = nodes.register(body)
+        audit.write(
+            AuditEntry(
+                actor="operator",
+                action="node.register",
+                target=node.node_id,
+                source="api",
+                before=before.model_dump() if before else None,
+                after=node.model_dump(),
+            )
+        )
+        return node.model_dump()
+
+    @app.get("/api/v1/vanguard/nodes/{node_id}")
+    def get_node(node_id: str):
+        node = nodes.get(node_id)
+        if not node:
+            raise HTTPException(status_code=404, detail="Node not found")
+        return node.model_dump()
+
+    @app.get("/api/v1/vanguard/nodes/{node_id}/readiness")
+    def node_readiness(node_id: str, profile: str = "GENERAL_WORKER"):
+        node = nodes.get(node_id)
+        if not node:
+            raise HTTPException(status_code=404, detail="Node not found")
+        prof = BUILTIN_PROFILES.get(profile)
+        if not prof:
+            raise HTTPException(status_code=404, detail=f"Unknown readiness profile '{profile}'")
+        result = evaluate(node, prof)
+        readiness_store.save(result)
+        return result.model_dump()
+
+    # ------------------------------------------------------------- services
+    @app.get("/api/v1/vanguard/services")
+    def list_services():
+        return [s.model_dump() for s in services.list()]
+
+    @app.post("/api/v1/vanguard/services", dependencies=[Depends(operator)], status_code=201)
+    def register_service(body: ServiceRegister):
+        before = services.get(body.service_id)
+        service = services.register(body)
+        audit.write(
+            AuditEntry(
+                actor="operator",
+                action="service.register",
+                target=service.service_id,
+                source="api",
+                before=before.model_dump() if before else None,
+                after=service.model_dump(),
+            )
+        )
+        return service.model_dump()
+
+    @app.get("/api/v1/vanguard/services/{service_id}")
+    def get_service(service_id: str):
+        service = resolveService(services, service_id)
+        if not service:
+            raise HTTPException(status_code=404, detail="Service not found")
+        return service.model_dump()
+
+    # ------------------------------------------------------------------ mesh
+    @app.get("/api/v1/vanguard/mesh/status")
+    def mesh_status():
+        return mesh.health().model_dump()
+
+    @app.get("/api/v1/vanguard/mesh/peers")
+    def mesh_peers():
+        return [p.model_dump() for p in mesh.list_nodes()]
+
+    @app.get("/api/v1/vanguard/mesh/routes")
+    def mesh_routes():
+        return [r.model_dump() for r in mesh.list_routes()]
+
+    @app.get("/api/v1/vanguard/mesh/policies")
+    def mesh_policies():
+        return [p.model_dump() for p in mesh.list_policies()]
+
+    @app.post("/api/v1/vanguard/mesh/enrollments", dependencies=[Depends(operator)], status_code=201)
+    def create_enrollment(name: str):
+        enrollment = mesh.create_enrollment(name)
+        audit.write(
+            AuditEntry(actor="operator", action="mesh.enrollment.create", target=name, source="api")
+        )
+        return enrollment.model_dump()
+
+    @app.delete("/api/v1/vanguard/mesh/enrollments/{enrollment_id}", dependencies=[Depends(operator)])
+    def revoke_enrollment(enrollment_id: str):
+        ok = mesh.revoke_node(enrollment_id)
+        audit.write(
+            AuditEntry(actor="operator", action="mesh.enrollment.revoke", target=enrollment_id, source="api")
+        )
+        return {"revoked": ok}
+
+    @app.post("/api/v1/vanguard/nodes/{node_id}/revoke", dependencies=[Depends(operator)])
+    def revoke_node(node_id: str):
+        ok = mesh.revoke_node(node_id)
+        audit.write(AuditEntry(actor="operator", action="node.revoke", target=node_id, source="api"))
+        return {"revoked": ok}
+
+    # -------------------------------------------------------------- readiness
+    @app.get("/api/v1/vanguard/readiness")
+    def readiness_overview():
+        results = readiness_store.all_latest()
+        return {
+            "profiles": list(BUILTIN_PROFILES.keys()),
+            "recent_results": [r.model_dump() for r in results],
+        }
+
+    # ------------------------------------------------------------ integrations
+    @app.get("/api/v1/vanguard/integrations")
+    def integrations_status():
+        return {
+            "steward": steward_adapter.status().model_dump(),
+            "watchtower": watchtower_adapter.status().model_dump(),
+            "marshal": marshal_adapter.status().model_dump(),
+            "dispatch": dispatch_adapter.status().model_dump(),
+        }
+
+    # ----------------------------------------------------------------- audit
+    @app.get("/api/v1/vanguard/audit", dependencies=[Depends(operator)])
+    def audit_log(limit: int = 100):
+        return [a.model_dump() for a in audit.list(limit)]
+
+    return app
+
+
+def app_factory():
+    return create_app()
