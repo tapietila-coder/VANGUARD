@@ -8,6 +8,8 @@ vanguard/
   nodeops/       Local hardware/OS detection (detect.py), SQLite-backed node inventory (inventory.py)
   readiness/     Built-in profiles (profiles.py), deterministic evaluation engine (engine.py)
   service_map/   Service registry + resolveService() resolver (registry.py)
+process_control/ Service Control: real subprocess start/stop/restart/health
+               (manager.py) — see "Service Control" below
   mesh/          MeshProvider interface + NullMeshProvider + NetBirdMeshProvider (provider.py)
   integrations/  StewardAdapter, WatchtowerAdapter, MarshalAdapter, DispatchAdapter (adapters.py)
   audit/         Append-only audit log writer (writer.py)
@@ -38,6 +40,16 @@ spec's `service-map/` naming is preserved in prose and docs.
    (nothing to connect to). Dispatch attempts a real read-only HTTP call to
    `http://127.0.0.1:8787/health` and reports `CONNECTED`/`NOT_CONNECTED` honestly.
 6. Every mutating API call writes an `AuditEntry` via `audit.writer.AuditWriter`.
+7. `process_control.manager.ProcessController` owns real start/stop/restart of
+   locally registered processes via `subprocess.Popen` (argv list, never a
+   shell string). A managed process is a superset of a plain `Service` —
+   registering one (`ProcessController.register`) also upserts a matching row
+   in the `services` table via `ServiceRegistry`, so it's visible through the
+   existing read-only `/services` routes unchanged; `process_control` owns a
+   separate `managed_processes` SQLite table for the extra control-plane
+   fields (argv, cwd, health probe URL, live runtime state: PID, state,
+   started_at, last_exit_code, last_checked, health). This build registers
+   exactly one real managed process: the local Dispatch API.
 
 ## What's real vs. stubbed
 
@@ -51,7 +63,8 @@ spec's `service-map/` naming is preserved in prose and docs.
 | Mesh (NetBird) | Contract + Null provider real; `NetBirdMeshProvider` untested against a live server — none exists |
 | Steward / Watchtower / Marshal | Contract-only stubs; no real systems exist |
 | Dispatch integration | Real read-only probe; degrades gracefully when Dispatch isn't running |
-| UI / dashboard (VANGUARD/RANGER, D27HQ nav) | Not built — explicitly out of scope for this pass |
+| Service Control (start/stop/restart of the local Dispatch process) | Real, `subprocess.Popen`-backed, tested against real spawned processes; one process registered (Dispatch) |
+| UI / dashboard (VANGUARD/RANGER, D27HQ nav) | Built (`ui/`); one real write action wired (Service Control) |
 
 ## Not built in this pass
 

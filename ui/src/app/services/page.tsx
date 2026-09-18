@@ -2,6 +2,7 @@ import { apiGet } from "@/lib/api";
 import { ApiUnreachable, ApiError, NOT_AVAILABLE } from "@/components/ApiUnreachable";
 import { Panel } from "@/components/Panel";
 import { ServiceResolver } from "@/components/ServiceResolver";
+import { ProcessControlPanel } from "@/components/ProcessControlPanel";
 import type { VanguardService } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -58,6 +59,18 @@ export default async function ServicesPage() {
           &quot;not found&quot; rather than a guess when nothing matches.
         </p>
         <ServiceResolver />
+      </Panel>
+
+      <Panel
+        title="Service control — dispatch"
+        subtitle="real start/stop/restart of the local Dispatch process"
+      >
+        <p className="mb-3 text-neutral-500 text-xs">
+          The only real process VANGUARD can control in this pass is the local D27HQ Dispatch API.
+          Start/stop/restart here spawn or terminate an actual local OS process — Stop and Restart
+          ask for confirmation first.
+        </p>
+        <ProcessControlPanel serviceId="dispatch" />
       </Panel>
     </div>
   );

@@ -137,6 +137,31 @@ export interface IntegrationsOverview {
   dispatch: IntegrationReport;
 }
 
+export type ProcessState = "RUNNING" | "STOPPED" | "STARTING" | "STOPPING" | "FAILED" | "UNKNOWN";
+
+export interface ManagedProcessStatus {
+  schema_version: 1;
+  service_id: string;
+  name: string;
+  working_dir: string;
+  command: string[];
+  health_url: string | null;
+  state: ProcessState;
+  pid: number | null;
+  started_at: string | null;
+  last_restart_at: string | null;
+  last_exit_code: number | null;
+  last_checked: string | null;
+  healthy: boolean | null;
+  health_detail: string;
+  log_path: string | null;
+}
+
+export interface ProcessLogsResponse {
+  service_id: string;
+  lines: string[];
+}
+
 export interface HealthResponse {
   status: string;
   mode: string;

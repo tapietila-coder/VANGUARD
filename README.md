@@ -42,10 +42,23 @@ See `VANGUARD_DISCOVERY.md` for the Mission-0 discovery pass this build is based
   isn't.
 - Append-only audit log (`vanguard/audit/`) recording actor/action/target/
   before/after/reason for every mutating API call.
-- 18 pytest tests, all passing locally (see "Test results" below).
+- **Service Control** (`vanguard/process_control/`): real start/stop/restart of
+  one actual local OS process — the local D27HQ Dispatch API
+  (`Dispatch/D27HQ_DISPATCH`) — via `subprocess.Popen` (never a shell string,
+  never a `taskkill` shell-out), with a real PID, a rotating per-service log
+  file under `data/logs/`, and a real health check (HTTP GET when a
+  `health_url` is configured, PID liveness otherwise). This is one
+  controllable local process, not a general process-management platform —
+  see "What is NOT implemented" below.
+- 29 pytest tests, all passing locally (see "Test results" below).
 
 ## What is NOT implemented / not claimed
 
+- **Service Control only manages one process (Dispatch).** It is not a
+  general process-management platform — no fleet of agents, no job queues, no
+  browser fleet, no ingest pipelines, no deployments/incidents/alerts/secrets/
+  backups/mesh-wide RBAC. Those were explicitly descoped from this pass; see
+  the original 15-subsystem spec this build deliberately did not attempt.
 - **No D27HQ nav integration** for the new `ui/` dashboard, and no
   VANGUARD/RANGER preservation work bundled with it.
 - **No real NetBird deployment.** No mesh is installed anywhere; `NullMeshProvider`
@@ -85,7 +98,7 @@ The API is then at `http://127.0.0.1:8788`. FastAPI's interactive docs are at
 ### Test results (this build)
 
 ```
-18 passed, 2 warnings in 1.52s
+29 passed, 2 warnings in 5.76s
 ```
 
 The 2 warnings are upstream FastAPI/Starlette deprecation notices unrelated to
@@ -108,6 +121,8 @@ GET /api/v1/vanguard/mesh/routes
 GET /api/v1/vanguard/mesh/policies
 GET /api/v1/vanguard/readiness
 GET /api/v1/vanguard/integrations
+GET /api/v1/vanguard/services/{id}/process
+GET /api/v1/vanguard/services/{id}/logs?lines=100
 ```
 
 Mutating, require `Authorization: Bearer <VANGUARD_API_TOKEN>`:
@@ -119,14 +134,23 @@ POST   /api/v1/vanguard/mesh/enrollments
 DELETE /api/v1/vanguard/mesh/enrollments/{id}
 POST   /api/v1/vanguard/nodes/{id}/revoke
 GET    /api/v1/vanguard/audit
+POST   /api/v1/vanguard/services/{id}/start
+POST   /api/v1/vanguard/services/{id}/stop
+POST   /api/v1/vanguard/services/{id}/restart
 ```
+
+Service Control is only registered for `service_id=dispatch` in this build.
+`VANGUARD_DISPATCH_DIR`/`VANGUARD_DISPATCH_PYTHON` (see `.env.example`) control
+where it's launched from; both default to the real on-disk sibling layout
+(`NCTIAPP/Dispatch/D27HQ_DISPATCH`).
 
 ## Source tree
 
 `vanguard/` = the installable package (`core`, `nodeops`, `readiness`,
-`service_map`, `mesh`, `integrations`, `audit`, `api`). `tests/` = pytest suite.
-`docs/` = architecture, mesh, readiness, and security notes. `VANGUARD_DISCOVERY.md`
-= the Mission-0 ground-truth audit this build is based on.
+`service_map`, `process_control`, `mesh`, `integrations`, `audit`, `api`).
+`tests/` = pytest suite. `docs/` = architecture, mesh, readiness, and security
+notes. `VANGUARD_DISCOVERY.md` = the Mission-0 ground-truth audit this build
+is based on.
 
 ## Follow-up (explicitly out of scope for this pass)
 
@@ -135,10 +159,15 @@ GET    /api/v1/vanguard/audit
 2. Real Steward/Marshal/Watchtower integrations once those systems exist.
 3. Remote node enrollment (Windows/GPU workers beyond the local machine).
 4. Multi-node storage (Postgres) if VANGUARD ever needs to run distributed.
-5. UI follow-up: no login/token UI, no write/mutating actions from the
-   dashboard, no cloud deployment of `ui/`, and no D27HQ-wide nav shell
-   integration — see `ui/README.md` for the current page set and what it
-   deliberately does not do.
+5. UI follow-up: no login/token UI, no cloud deployment of `ui/`, and no
+   D27HQ-wide nav shell integration — the `/services` page now has one real
+   write action (Service Control's start/stop/restart for `dispatch`), see
+   `ui/README.md` for the current page set and what it still doesn't do.
+6. Service Control follow-up: only Dispatch is registered; no fleet of
+   managed processes, no auto-restart-on-crash policy, no adoption of a
+   process started outside VANGUARD without `psutil` installed (documented
+   limitation in `vanguard/process_control/manager.py`), no process control
+   for any node other than this local machine.
 
 ## Safety and compatibility
 
