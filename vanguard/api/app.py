@@ -1,6 +1,7 @@
 """FastAPI app. Read-only routes are unauthenticated (documented dev-only posture,
 matching Dispatch's local-token pattern); mutating routes require a bearer token."""
 import hmac
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -10,12 +11,14 @@ from ..core.config import Settings
 from ..core.db import Database
 from ..core.models import (
     AuditEntry,
+    ManagedProcessConfig,
     NodeRegister,
     ServiceRegister,
 )
 from ..integrations.adapters import DispatchAdapter, MarshalAdapter, StewardAdapter, WatchtowerAdapter
 from ..mesh.provider import build_mesh_provider
 from ..nodeops.inventory import NodeInventory
+from ..process_control.manager import ProcessController
 from ..readiness.engine import ReadinessStore, evaluate
 from ..readiness.profiles import BUILTIN_PROFILES
 from ..service_map.registry import ServiceRegistry, resolveService
@@ -35,6 +38,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     watchtower_adapter = WatchtowerAdapter()
     marshal_adapter = MarshalAdapter()
 
+    # Service Control: real start/stop/restart of actual local processes.
+    # One real managed process is registered for this pass — the local Dispatch
+    # API. Registration only happens when dispatch_dir/dispatch_python are set
+    # (Settings.from_env() always computes real defaults; directly-constructed
+    # Settings, as in tests, default them to "" so nothing is auto-registered).
+    log_dir = os.path.join(os.path.dirname(cfg.db_path) or ".", "logs")
+    processes = ProcessController(db, services, log_dir=log_dir)
+    if cfg.dispatch_dir and cfg.dispatch_python:
+        processes.register(
+            ManagedProcessConfig(
+                service_id="dispatch",
+                name="D27HQ Dispatch",
+                working_dir=cfg.dispatch_dir,
+                command=[cfg.dispatch_python, "-m", "dispatch", "serve"],
+                health_url=f"{cfg.dispatch_base_url}/health",
+            )
+        )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         yield
@@ -50,6 +71,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.nodes = nodes
     app.state.services = services
     app.state.mesh = mesh
+    app.state.processes = processes
 
     def operator(authorization: str | None = Header(default=None)):
         if not authorization or not authorization.startswith("Bearer ") or not hmac.compare_digest(
@@ -129,6 +151,67 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not service:
             raise HTTPException(status_code=404, detail="Service not found")
         return service.model_dump()
+
+    # ------------------------------------------------------- process control
+    @app.get("/api/v1/vanguard/services/{service_id}/process")
+    def get_process(service_id: str):
+        try:
+            return processes.status(service_id).model_dump()
+        except KeyError:
+            raise HTTPException(status_code=404, detail="No managed process registered for this service")
+
+    @app.post("/api/v1/vanguard/services/{service_id}/start", dependencies=[Depends(operator)])
+    def start_process(service_id: str, reason: str = ""):
+        try:
+            before = processes.status(service_id, check_health=False).model_dump()
+        except KeyError:
+            raise HTTPException(status_code=404, detail="No managed process registered for this service")
+        after = processes.start(service_id)
+        audit.write(
+            AuditEntry(
+                actor="operator", action="process.start", target=service_id, source="api",
+                before=before, after=after.model_dump(), reason=reason,
+            )
+        )
+        return after.model_dump()
+
+    @app.post("/api/v1/vanguard/services/{service_id}/stop", dependencies=[Depends(operator)])
+    def stop_process(service_id: str, reason: str = ""):
+        try:
+            before = processes.status(service_id, check_health=False).model_dump()
+        except KeyError:
+            raise HTTPException(status_code=404, detail="No managed process registered for this service")
+        after = processes.stop(service_id)
+        audit.write(
+            AuditEntry(
+                actor="operator", action="process.stop", target=service_id, source="api",
+                before=before, after=after.model_dump(), reason=reason,
+            )
+        )
+        return after.model_dump()
+
+    @app.post("/api/v1/vanguard/services/{service_id}/restart", dependencies=[Depends(operator)])
+    def restart_process(service_id: str, reason: str = ""):
+        try:
+            before = processes.status(service_id, check_health=False).model_dump()
+        except KeyError:
+            raise HTTPException(status_code=404, detail="No managed process registered for this service")
+        after = processes.restart(service_id)
+        audit.write(
+            AuditEntry(
+                actor="operator", action="process.restart", target=service_id, source="api",
+                before=before, after=after.model_dump(), reason=reason,
+            )
+        )
+        return after.model_dump()
+
+    @app.get("/api/v1/vanguard/services/{service_id}/logs")
+    def process_logs(service_id: str, lines: int = 100):
+        try:
+            entries = processes.logs(service_id, lines=lines)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="No managed process registered for this service")
+        return {"service_id": service_id, "lines": entries}
 
     # ------------------------------------------------------------------ mesh
     @app.get("/api/v1/vanguard/mesh/status")
