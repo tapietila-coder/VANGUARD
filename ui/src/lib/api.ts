@@ -54,7 +54,8 @@ export const VANGUARD_API_TOKEN =
 
 export async function apiPost<T>(
   path: string,
-  params?: Record<string, string>
+  params?: Record<string, string>,
+  body?: unknown
 ): Promise<ApiResult<T>> {
   const url = new URL(`${API_PREFIX}${path}`, VANGUARD_API_BASE);
   if (params) {
@@ -66,7 +67,11 @@ export async function apiPost<T>(
     res = await fetch(url.toString(), {
       method: "POST",
       cache: "no-store",
-      headers: { Authorization: `Bearer ${VANGUARD_API_TOKEN}` },
+      headers: {
+        Authorization: `Bearer ${VANGUARD_API_TOKEN}`,
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
   } catch {
     return {

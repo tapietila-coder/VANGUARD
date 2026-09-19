@@ -167,3 +167,22 @@ export interface HealthResponse {
   mode: string;
   environment: string;
 }
+
+export type JobState = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELED" | "RETRYING";
+
+export interface Job {
+  schema_version: 1;
+  job_id: string;
+  job_type: string;
+  params: Record<string, unknown>;
+  state: JobState;
+  progress: string;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  retries: number;
+  max_retries: number;
+  requested_by: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}

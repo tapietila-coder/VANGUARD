@@ -58,6 +58,16 @@ VANGUARD_API_BASE=http://127.0.0.1:8788
   a real local process), and an expandable, manually-refreshed log tail.
 - `/readiness` — the built-in readiness profiles and the most recent
   evaluation results recorded by the backend.
+- `/jobs` — the real Job Queue: a table of every submitted job (id, type,
+  state with the same color-coding pattern as Service Control, created/
+  started/finished times, current progress string), a submit form for the
+  three real registered job types (`readiness_sweep`,
+  `service_health_check`, `audit_log_export`), and an honest "No jobs yet —
+  submit one below" empty state. Click a job to open `/jobs/[id]` for full
+  progress/result/error (pretty-printed JSON), a Cancel button (while
+  cancelable, with a confirmation step) and a Retry button (only enabled on a
+  `FAILED` job under `max_retries`); the detail page polls every second while
+  the job is `QUEUED`/`RUNNING`/`RETRYING` so state changes show up live.
 
 ## What this UI does NOT do
 
@@ -66,10 +76,12 @@ VANGUARD_API_BASE=http://127.0.0.1:8788
   (see `../docs/SECURITY.md`).
 - No cloud deployment. This is a local `next dev` app only.
 - The **only** write actions anywhere in the current page set are Service
-  Control's Start/Stop/Restart on `/services` — everything else is a read of
-  real backend state. Those three actions go through
-  `src/app/api/services/[id]/process/[action]/route.ts`, a server-side proxy
-  that holds `VANGUARD_API_TOKEN` (read from `.env.local`, never sent to the
+  Control's Start/Stop/Restart on `/services` and the Job Queue's
+  Submit/Cancel/Retry on `/jobs` — everything else is a read of real backend
+  state. All of these go through server-side proxies
+  (`src/app/api/services/[id]/process/[action]/route.ts` and
+  `src/app/api/jobs/route.ts` / `src/app/api/jobs/[id]/[action]/route.ts`)
+  that hold `VANGUARD_API_TOKEN` (read from `.env.local`, never sent to the
   browser) — the same CORS-workaround pattern the resolve-by-name proxy
   established, extended to also carry the bearer token.
 
@@ -87,6 +99,7 @@ VANGUARD_API_BASE=http://127.0.0.1:8788
   backend has no CORS middleware, so a browser can't call it directly from a
   different origin/port; the proxy runs on the Next.js server and forwards to
   the real API.
-- All five pages are server components using `export const dynamic =
+- All pages are server components using `export const dynamic =
   "force-dynamic"` so they always show live backend state, never a stale
-  build-time snapshot.
+  build-time snapshot; `/jobs/[id]` additionally hydrates a client component
+  (`JobDetailPanel`) that polls for live state while a job is active.
