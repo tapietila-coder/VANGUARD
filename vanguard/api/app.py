@@ -11,11 +11,14 @@ from ..core.config import Settings
 from ..core.db import Database
 from ..core.models import (
     AuditEntry,
+    JobSubmit,
     ManagedProcessConfig,
     NodeRegister,
     ServiceRegister,
 )
 from ..integrations.adapters import DispatchAdapter, MarshalAdapter, StewardAdapter, WatchtowerAdapter
+from ..jobs.job_types import JOB_REGISTRY, JobDeps
+from ..jobs.queue import JobQueue
 from ..mesh.provider import build_mesh_provider
 from ..nodeops.inventory import NodeInventory
 from ..process_control.manager import ProcessController
@@ -56,9 +59,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         )
 
+    # Job Queue: real local ThreadPoolExecutor-backed execution of the
+    # registered job types (vanguard/jobs/job_types.py), acting on the exact
+    # same live nodes/services/processes/audit objects wired above.
+    job_deps = JobDeps(
+        nodes=nodes,
+        services=services,
+        processes=processes,
+        readiness_store=readiness_store,
+        audit=audit,
+        export_dir=cfg.job_export_dir,
+    )
+    jobs = JobQueue(db, job_deps, registry=JOB_REGISTRY, worker_count=cfg.job_worker_count)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         yield
+        jobs.shutdown(wait=False)
         db.close()
 
     app = FastAPI(
@@ -72,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.services = services
     app.state.mesh = mesh
     app.state.processes = processes
+    app.state.jobs = jobs
 
     def operator(authorization: str | None = Header(default=None)):
         if not authorization or not authorization.startswith("Bearer ") or not hmac.compare_digest(
@@ -270,6 +288,70 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "marshal": marshal_adapter.status().model_dump(),
             "dispatch": dispatch_adapter.status().model_dump(),
         }
+
+    # ------------------------------------------------------------------ jobs
+    @app.get("/api/v1/vanguard/jobs")
+    def list_jobs(state: str | None = None, job_type: str | None = None):
+        return [j.model_dump() for j in jobs.store.list(state=state, job_type=job_type)]
+
+    @app.get("/api/v1/vanguard/jobs/{job_id}")
+    def get_job(job_id: str):
+        job = jobs.store.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return job.model_dump()
+
+    @app.post("/api/v1/vanguard/jobs", dependencies=[Depends(operator)], status_code=201)
+    def submit_job(body: JobSubmit):
+        if body.job_type not in jobs.registry:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown job_type '{body.job_type}'; registered types: {sorted(jobs.registry)}",
+            )
+        job = jobs.submit(
+            job_type=body.job_type, params=body.params, requested_by="operator", max_retries=body.max_retries
+        )
+        audit.write(
+            AuditEntry(
+                actor="operator", action="job.submit", target=job.job_id, source="api",
+                after=job.model_dump(),
+            )
+        )
+        return job.model_dump()
+
+    @app.post("/api/v1/vanguard/jobs/{job_id}/cancel", dependencies=[Depends(operator)])
+    def cancel_job(job_id: str):
+        try:
+            before = jobs.store.get(job_id)
+            if before is None:
+                raise HTTPException(status_code=404, detail="Job not found")
+            after = jobs.cancel(job_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Job not found")
+        audit.write(
+            AuditEntry(
+                actor="operator", action="job.cancel", target=job_id, source="api",
+                before=before.model_dump(), after=after.model_dump(),
+            )
+        )
+        return after.model_dump()
+
+    @app.post("/api/v1/vanguard/jobs/{job_id}/retry", dependencies=[Depends(operator)])
+    def retry_job(job_id: str):
+        before = jobs.store.get(job_id)
+        if before is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        try:
+            after = jobs.retry(job_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        audit.write(
+            AuditEntry(
+                actor="operator", action="job.retry", target=job_id, source="api",
+                before=before.model_dump(), after=after.model_dump(),
+            )
+        )
+        return after.model_dump()
 
     # ----------------------------------------------------------------- audit
     @app.get("/api/v1/vanguard/audit", dependencies=[Depends(operator)])

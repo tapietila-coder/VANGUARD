@@ -33,6 +33,11 @@ class Settings:
     # from_env() (or the caller) explicitly supplies real paths.
     dispatch_dir: str = ""
     dispatch_python: str = ""
+    # Job Queue: how many worker threads run queued jobs concurrently. A small
+    # in-process ThreadPoolExecutor is the right size for this single-node
+    # reference service — not a distributed queue.
+    job_worker_count: int = 2
+    job_export_dir: str = "./data/exports"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -59,6 +64,8 @@ class Settings:
             node_stale_after_seconds=int(os.getenv("VANGUARD_NODE_STALE_SECONDS", "300")),
             dispatch_dir=dispatch_dir,
             dispatch_python=dispatch_python,
+            job_worker_count=int(os.getenv("VANGUARD_JOB_WORKERS", "2")),
+            job_export_dir=os.getenv("VANGUARD_JOB_EXPORT_DIR", "./data/exports"),
         )
 
     def validate(self) -> None:
@@ -66,3 +73,5 @@ class Settings:
             raise ValueError("api_token must be at least 24 characters")
         if self.mesh_provider not in ("null", "netbird"):
             raise ValueError("mesh_provider must be 'null' or 'netbird'")
+        if self.job_worker_count < 1:
+            raise ValueError("job_worker_count must be at least 1")
