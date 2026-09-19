@@ -197,6 +197,41 @@ def test_logs_endpoint_returns_real_captured_output(controller, tmp_path):
         ctrl.stop("looper")
 
 
+def test_log_sources_reports_real_file_state(controller, tmp_path):
+    ctrl, _ = controller
+    script = _write_script(tmp_path, "loop.py", RUNNER_SCRIPT)
+    cfg = ManagedProcessConfig(
+        service_id="looper", name="Test Looper", working_dir=str(tmp_path),
+        command=[sys.executable, script],
+    )
+    ctrl.register(cfg)
+
+    # Before starting: registered, but no log file exists yet.
+    sources = ctrl.list_configs()
+    assert [c.service_id for c in sources] == ["looper"]
+    before = ctrl.log_sources()
+    assert len(before) == 1
+    assert before[0]["service_id"] == "looper"
+    assert before[0]["exists"] is False
+    assert before[0]["line_count"] is None
+
+    ctrl.start("looper")
+    try:
+        deadline = time.time() + 5
+        after = before
+        while time.time() < deadline:
+            after = ctrl.log_sources()
+            if after[0]["exists"] and after[0]["line_count"]:
+                break
+            time.sleep(0.1)
+        assert after[0]["exists"] is True
+        assert after[0]["line_count"] and after[0]["line_count"] > 0
+        assert after[0]["last_modified"] is not None
+        assert after[0]["state"] == "RUNNING"
+    finally:
+        ctrl.stop("looper")
+
+
 def test_stop_when_not_running_is_a_noop(controller, tmp_path):
     ctrl, _ = controller
     script = _write_script(tmp_path, "loop.py", RUNNER_SCRIPT)
@@ -255,7 +290,7 @@ def test_start_stop_restart_each_write_a_real_audit_entry(tmp_path):
     assert r.status_code == 200, r.text
 
     audit = client.get("/api/v1/vanguard/audit", headers=headers).json()
-    actions = [a["action"] for a in audit if a["target"] == "audited"]
+    actions = [a["action"] for a in audit["entries"] if a["target"] == "audited"]
     assert "process.start" in actions
     assert "process.restart" in actions
     assert "process.stop" in actions

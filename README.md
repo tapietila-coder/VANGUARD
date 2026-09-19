@@ -28,11 +28,14 @@ See `VANGUARD_DISCOVERY.md` for the Mission-0 discovery pass this build is based
   reports `NOT_CONNECTED`, never fake peers) and a `NetBirdMeshProvider` contract
   implementation that has never been run against a live server.
 - A minimal Next.js UI (`ui/`) — Overview, Nodes (+ per-node detail with
-  readiness evaluation), Mesh, Services (+ resolve-by-name), and Readiness
-  pages, all reading real data from the routes below with an honest
-  "API unreachable" state and no fabricated values. No login UI (read-only
-  routes need none locally), no write actions from the dashboard, no cloud
-  deployment — see `ui/README.md` for how to run it and what's still missing.
+  readiness evaluation), Mesh, Services (+ resolve-by-name), Readiness, Jobs
+  (+ submit/cancel/retry), Audit (filterable, paginated, real
+  before/after/reason per entry), and Logs (cross-service list of every
+  service with a real captured log file, pick one to tail + client-side
+  substring filter) pages, all reading real data from the routes below with
+  an honest "API unreachable" state and no fabricated values. No login UI
+  (read-only routes need none locally), no cloud deployment — see
+  `ui/README.md` for how to run it and what's still missing.
 - Stub adapters for Steward/Watchtower/Marshal that always report
   `NOT_CONNECTED` (`vanguard/integrations/adapters.py`), because none of those
   systems exist anywhere in this environment (verified by repo search — see
@@ -41,7 +44,11 @@ See `VANGUARD_DISCOVERY.md` for the Mission-0 discovery pass this build is based
   service when it's running, and degrades gracefully to `NOT_CONNECTED` when it
   isn't.
 - Append-only audit log (`vanguard/audit/`) recording actor/action/target/
-  before/after/reason for every mutating API call.
+  before/after/reason for every mutating API call, with real filtering
+  (`actor`, `action`, `target`, `since`, `until`) and pagination
+  (`limit`/`offset`) on both the query layer and `GET /audit`, plus a
+  dedicated `/audit` UI page (reverse-chronological, filter form, real
+  before/after diffs, honest "No audit entries yet" empty state).
 - **Service Control** (`vanguard/process_control/`): real start/stop/restart of
   one actual local OS process — the local D27HQ Dispatch API
   (`Dispatch/D27HQ_DISPATCH`) — via `subprocess.Popen` (never a shell string,
@@ -64,7 +71,17 @@ See `VANGUARD_DISCOVERY.md` for the Mission-0 discovery pass this build is based
   type used by the test suite to exercise cancel/retry deterministically — not
   a claimed operator capability. This is a local in-process job queue, not a
   general workflow engine — see "What is NOT implemented" below.
-- 39 pytest tests, all passing locally (see "Test results" below).
+- **Logs (centralized)**: a new `GET /api/v1/vanguard/logs` route lists every
+  service registered with Service Control and its real `data/logs/*.log`
+  state (whether the file exists yet, its size, last-modified time, and a
+  real line count) — no fabricated services, honestly empty when nothing is
+  registered. The new `/logs` UI page renders this list, lets an operator
+  pick any service and tail its real captured output (reusing the existing
+  per-service `GET /services/{id}/logs?lines=N` route), and applies a
+  client-side substring filter to the currently-loaded tail. Still not a
+  general log-aggregation system — one machine's local files, no
+  correlation IDs, no server-side search.
+- 47 pytest tests, all passing locally (see "Test results" below).
 
 ## What is NOT implemented / not claimed
 
@@ -119,7 +136,7 @@ The API is then at `http://127.0.0.1:8788`. FastAPI's interactive docs are at
 ### Test results (this build)
 
 ```
-39 passed, 2 warnings in 6.83s
+47 passed, 2 warnings in 8.09s
 ```
 
 The 2 warnings are upstream FastAPI/Starlette deprecation notices unrelated to
@@ -146,6 +163,7 @@ GET /api/v1/vanguard/services/{id}/process
 GET /api/v1/vanguard/services/{id}/logs?lines=100
 GET /api/v1/vanguard/jobs?state=&job_type=
 GET /api/v1/vanguard/jobs/{id}
+GET /api/v1/vanguard/logs
 ```
 
 Mutating, require `Authorization: Bearer <VANGUARD_API_TOKEN>`:
@@ -156,7 +174,7 @@ POST   /api/v1/vanguard/services
 POST   /api/v1/vanguard/mesh/enrollments
 DELETE /api/v1/vanguard/mesh/enrollments/{id}
 POST   /api/v1/vanguard/nodes/{id}/revoke
-GET    /api/v1/vanguard/audit
+GET    /api/v1/vanguard/audit?limit=&offset=&actor=&action=&target=&since=&until=
 POST   /api/v1/vanguard/services/{id}/start
 POST   /api/v1/vanguard/services/{id}/stop
 POST   /api/v1/vanguard/services/{id}/restart
@@ -176,6 +194,15 @@ The Job Queue's real registered `job_type` values are `readiness_sweep`,
 `queue_selftest`. `POST /jobs` rejects any other `job_type` with `400`.
 `VANGUARD_JOB_WORKERS`/`VANGUARD_JOB_EXPORT_DIR` (see `.env.example`) control
 worker-pool size and where `audit_log_export` writes its snapshots.
+
+`GET /jobs` returns a bare list of jobs. `GET /audit` returns
+`{"entries": [...], "total": <int>, "limit": <int>, "offset": <int>}` — a
+different shape from the other list routes, chosen so the `/audit` UI page
+can paginate against a real total instead of guessing whether more entries
+exist. All five filter params (`actor`/`action`/`target`/`since`/`until`)
+are exact-match against real stored columns (`since`/`until` compare
+lexically against the ISO-8601 `created_at` timestamp) — there is no fuzzy
+or full-text search.
 
 ## Source tree
 

@@ -226,7 +226,7 @@ def test_every_mutating_job_action_writes_a_real_audit_entry(client, auth_header
     client.post(f"/api/v1/vanguard/jobs/{job2}/retry", headers=auth_headers)
 
     audit = client.get("/api/v1/vanguard/audit", headers=auth_headers).json()
-    actions_by_target = {(a["action"], a["target"]) for a in audit}
+    actions_by_target = {(a["action"], a["target"]) for a in audit["entries"]}
     assert ("job.submit", job_id) in actions_by_target
     assert ("job.cancel", job_id) in actions_by_target
     assert ("job.submit", job2) in actions_by_target

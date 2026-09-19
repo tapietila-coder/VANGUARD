@@ -68,22 +68,48 @@ VANGUARD_API_BASE=http://127.0.0.1:8788
   cancelable, with a confirmation step) and a Retry button (only enabled on a
   `FAILED` job under `max_retries`); the detail page polls every second while
   the job is `QUEUED`/`RUNNING`/`RETRYING` so state changes show up live.
+- `/audit` — the real append-only audit log, reverse-chronological, with a
+  filter form (`actor`, `action`, `target`, `since`, `until` — all
+  exact/prefix matches on real columns, no fuzzy search) and pagination
+  (25 entries/page, "showing N–M of total" + newer/older links) against a
+  real `total` count from the backend. Each entry shows the real
+  actor/action/target/source/reason and pretty-printed before/after JSON
+  diffs when present. Honest "No audit entries yet" empty state (with a
+  filter-aware variant when filters are applied and match nothing). Because
+  `GET /audit` requires the operator bearer token on the backend (unlike
+  most read routes), this page calls it server-side with the token attached
+  directly — it does not need a client-side proxy since there's no
+  client-side interactivity beyond standard link/form navigation.
+- `/logs` — cross-service index of every service registered with Service
+  Control and its real `data/logs/*.log` file (exists/size/last-modified/
+  line count from `GET /logs`), rendered by the `LogsExplorer` client
+  component: pick a service, tail its real captured output (reusing the
+  per-service `GET /services/{id}/logs?lines=N` route via the existing
+  `/api/services/[id]/logs` proxy), and apply a client-side substring filter
+  to the currently-loaded tail. Honest "no services have a real captured log
+  yet" state when nothing is registered with Service Control.
 
 ## What this UI does NOT do
 
-- No login/token UI. Almost every page here only calls **read-only** VANGUARD
+- No login/token UI. Most pages here only call **read-only** VANGUARD
   routes, which the backend deliberately leaves unauthenticated for local dev
-  (see `../docs/SECURITY.md`).
+  (see `../docs/SECURITY.md`) — `GET /audit` is the one read-only route that
+  is bearer-token-protected on the backend, handled server-side as noted
+  above rather than via a client-side proxy.
 - No cloud deployment. This is a local `next dev` app only.
 - The **only** write actions anywhere in the current page set are Service
   Control's Start/Stop/Restart on `/services` and the Job Queue's
-  Submit/Cancel/Retry on `/jobs` — everything else is a read of real backend
-  state. All of these go through server-side proxies
+  Submit/Cancel/Retry on `/jobs` — `/audit` and `/logs` are both read-only.
+  Everything else is a read of real backend state. The write actions go
+  through server-side proxies
   (`src/app/api/services/[id]/process/[action]/route.ts` and
   `src/app/api/jobs/route.ts` / `src/app/api/jobs/[id]/[action]/route.ts`)
   that hold `VANGUARD_API_TOKEN` (read from `.env.local`, never sent to the
   browser) — the same CORS-workaround pattern the resolve-by-name proxy
-  established, extended to also carry the bearer token.
+  established, extended to also carry the bearer token. `/audit` needs no
+  proxy route of its own: it's a server component with no client-side
+  interactivity (filters/pagination are plain `<form method="get">` and
+  `<Link>` navigation), so it calls `apiGet(..., { auth: true })` directly.
 
 ## Architecture notes
 

@@ -26,9 +26,45 @@ class AuditWriter:
             entry_id = cur.lastrowid
         return entry.model_copy(update={"entry_id": entry_id})
 
-    def list(self, limit: int = 100) -> list[AuditEntry]:
+    def list(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        actor: str | None = None,
+        action: str | None = None,
+        target: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> list[AuditEntry]:
+        """List entries, most recent first. All filters are exact/prefix
+        matches on real stored columns — no fuzzy search. `since`/`until` are
+        ISO-8601 timestamp bounds compared lexically against `created_at`
+        (safe because it's always written via `datetime.isoformat()`, which
+        sorts the same lexically and chronologically)."""
+        clauses: list[str] = []
+        params: list = []
+        if actor:
+            clauses.append("actor = ?")
+            params.append(actor)
+        if action:
+            clauses.append("action = ?")
+            params.append(action)
+        if target:
+            clauses.append("target = ?")
+            params.append(target)
+        if since:
+            clauses.append("created_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("created_at <= ?")
+            params.append(until)
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = f"SELECT * FROM audit_log {where} ORDER BY entry_id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
         with self.db.cursor() as cur:
-            cur.execute("SELECT * FROM audit_log ORDER BY entry_id DESC LIMIT ?", (limit,))
+            cur.execute(query, params)
             rows = cur.fetchall()
         out = []
         for row in rows:
@@ -46,3 +82,35 @@ class AuditWriter:
                 )
             )
         return out
+
+    def count(
+        self,
+        actor: str | None = None,
+        action: str | None = None,
+        target: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> int:
+        clauses: list[str] = []
+        params: list = []
+        if actor:
+            clauses.append("actor = ?")
+            params.append(actor)
+        if action:
+            clauses.append("action = ?")
+            params.append(action)
+        if target:
+            clauses.append("target = ?")
+            params.append(target)
+        if since:
+            clauses.append("created_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("created_at <= ?")
+            params.append(until)
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self.db.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) AS c FROM audit_log {where}", params)
+            row = cur.fetchone()
+        return int(row["c"])

@@ -231,6 +231,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="No managed process registered for this service")
         return {"service_id": service_id, "lines": entries}
 
+    # ------------------------------------------------------------------- logs
+    @app.get("/api/v1/vanguard/logs")
+    def list_log_sources():
+        """Every real managed process and its actual `data/logs/*.log` file
+        state (exists/size/last-modified/line count) — the cross-service index
+        the /logs UI page renders. No fabricated services: this is exactly
+        `processes.list_configs()`, which only ever contains processes that
+        were really registered via Service Control."""
+        return processes.log_sources()
+
     # ------------------------------------------------------------------ mesh
     @app.get("/api/v1/vanguard/mesh/status")
     def mesh_status():
@@ -355,8 +365,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # ----------------------------------------------------------------- audit
     @app.get("/api/v1/vanguard/audit", dependencies=[Depends(operator)])
-    def audit_log(limit: int = 100):
-        return [a.model_dump() for a in audit.list(limit)]
+    def audit_log(
+        limit: int = 100,
+        offset: int = 0,
+        actor: str | None = None,
+        action: str | None = None,
+        target: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ):
+        entries = audit.list(
+            limit=limit, offset=offset, actor=actor, action=action, target=target, since=since, until=until
+        )
+        total = audit.count(actor=actor, action=action, target=target, since=since, until=until)
+        return {
+            "entries": [a.model_dump() for a in entries],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
 
     return app
 
