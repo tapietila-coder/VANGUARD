@@ -81,7 +81,27 @@ See `VANGUARD_DISCOVERY.md` for the Mission-0 discovery pass this build is based
   client-side substring filter to the currently-loaded tail. Still not a
   general log-aggregation system — one machine's local files, no
   correlation IDs, no server-side search.
-- 47 pytest tests, all passing locally (see "Test results" below).
+- **System Health (aggregate)**: a new `GET /api/v1/vanguard/system-health`
+  route (`vanguard/system_health/aggregator.py`) runs eight real, fresh checks
+  on every call — API (trivially true if the request executed), Database (a
+  real `SELECT 1` + write probe against the live SQLite file), Job Queue
+  (real configured/alive worker counts and real queued/running job counts),
+  Service Control (the real managed-process state, reusing
+  `ProcessController.status()` — never a duplicate check), Mesh (the real
+  `MeshProvider.health()`), Integrations (the real Steward/Watchtower/
+  Marshal/Dispatch adapter statuses), Readiness (a summary of the latest real
+  readiness evaluations), and Audit Log (a real `COUNT(*)` reachability
+  check) — assembled server-side into one atomic, honestly-timestamped
+  snapshot rather than six-plus separate client calls that could race each
+  other. Every row carries its own real `checked_at` and reuses whichever
+  status vocabulary that subsystem already has elsewhere in this API
+  (ProcessState, MeshConnectionStatus, IntegrationStatus, ReadinessState, or
+  `OK`/`DEGRADED`/`FAILED` for the generic checks) — no new taxonomy, so the
+  existing UI color-coding applies unchanged. The new `/system-health` UI
+  page (added to the top nav) renders one dense row per subsystem with a
+  manual refresh control, and follows this project's honest "whole page says
+  API unreachable" pattern exactly if the backend can't be reached.
+- 58 pytest tests, all passing locally (see "Test results" below).
 
 ## What is NOT implemented / not claimed
 
@@ -136,7 +156,7 @@ The API is then at `http://127.0.0.1:8788`. FastAPI's interactive docs are at
 ### Test results (this build)
 
 ```
-47 passed, 2 warnings in 8.09s
+58 passed, 2 warnings in 32.43s
 ```
 
 The 2 warnings are upstream FastAPI/Starlette deprecation notices unrelated to
@@ -164,6 +184,7 @@ GET /api/v1/vanguard/services/{id}/logs?lines=100
 GET /api/v1/vanguard/jobs?state=&job_type=
 GET /api/v1/vanguard/jobs/{id}
 GET /api/v1/vanguard/logs
+GET /api/v1/vanguard/system-health
 ```
 
 Mutating, require `Authorization: Bearer <VANGUARD_API_TOKEN>`:
@@ -208,9 +229,9 @@ or full-text search.
 
 `vanguard/` = the installable package (`core`, `nodeops`, `readiness`,
 `service_map`, `process_control`, `jobs`, `mesh`, `integrations`, `audit`,
-`api`). `tests/` = pytest suite. `docs/` = architecture, mesh, readiness, and
-security notes. `VANGUARD_DISCOVERY.md` = the Mission-0 ground-truth audit
-this build is based on.
+`system_health`, `api`). `tests/` = pytest suite. `docs/` = architecture,
+mesh, readiness, and security notes. `VANGUARD_DISCOVERY.md` = the Mission-0
+ground-truth audit this build is based on.
 
 ## Follow-up (explicitly out of scope for this pass)
 

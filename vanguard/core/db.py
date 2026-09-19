@@ -4,6 +4,7 @@ import os
 import sqlite3
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS nodes (
@@ -79,6 +80,13 @@ CREATE TABLE IF NOT EXISTS audit_log (
     reason TEXT,
     created_at TEXT NOT NULL
 );
+
+-- A single-row table used only as a real read/write liveness probe (System
+-- Health). No operational data lives here; see Database.check_read_write().
+CREATE TABLE IF NOT EXISTS health_probe (
+    id INTEGER PRIMARY KEY,
+    checked_at TEXT NOT NULL
+);
 """
 
 
@@ -113,6 +121,24 @@ class Database:
 
     def close(self) -> None:
         self._conn.close()
+
+    def check_read_write(self) -> tuple[bool, str]:
+        """Real, lightweight liveness check used by System Health: a real
+        `SELECT 1` plus a real write (upsert) against a dedicated single-row
+        probe table, executed against the actual live connection/file right
+        now — never a cached or assumed-good value."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+                cur.execute(
+                    "INSERT INTO health_probe (id, checked_at) VALUES (1, ?) "
+                    "ON CONFLICT(id) DO UPDATE SET checked_at = excluded.checked_at",
+                    (datetime.now(timezone.utc).isoformat(),),
+                )
+            return True, f"SELECT 1 + write probe ok against {self.db_path}"
+        except Exception as exc:  # noqa: BLE001 - report the real failure, never fabricate success
+            return False, f"{exc.__class__.__name__}: {exc}"
 
 
 def dumps(obj) -> str:

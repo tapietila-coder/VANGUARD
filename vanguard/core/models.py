@@ -358,3 +358,32 @@ class Job(StrictModel):
     created_at: str = Field(default_factory=utcnow)
     started_at: str | None = None
     finished_at: str | None = None
+
+
+# --------------------------------------------------------------------------
+# System Health (aggregate)
+#
+# One row per real subsystem check. `status` is deliberately a plain string
+# rather than one shared enum: each subsystem reuses whatever status
+# vocabulary it already has elsewhere in this API (ProcessState for Service
+# Control, MeshConnectionStatus for Mesh, IntegrationStatus for
+# Steward/Watchtower/Marshal/Dispatch, ReadinessState for Readiness) so the
+# existing UI color-coding (StatusBadge) applies unchanged with no new taxonomy
+# invented. The generic checks that have no native status type of their own
+# (API/Database/Jobs/Audit) use "OK" / "DEGRADED" / "FAILED", which the UI's
+# StatusBadge already recognizes. `checked_at` is mandatory on every row —
+# System Health never presents a status without saying how fresh it is.
+# --------------------------------------------------------------------------
+
+class SystemHealthRow(StrictModel):
+    schema_version: Literal[1] = 1
+    subsystem: str = Field(min_length=1, max_length=100)
+    status: str = Field(min_length=1, max_length=50)
+    detail: str = Field(default="", max_length=2000)
+    checked_at: str = Field(default_factory=utcnow)
+
+
+class SystemHealthReport(StrictModel):
+    schema_version: Literal[1] = 1
+    rows: list[SystemHealthRow]
+    generated_at: str = Field(default_factory=utcnow)

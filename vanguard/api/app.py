@@ -25,6 +25,7 @@ from ..process_control.manager import ProcessController
 from ..readiness.engine import ReadinessStore, evaluate
 from ..readiness.profiles import BUILTIN_PROFILES
 from ..service_map.registry import ServiceRegistry, resolveService
+from ..system_health.aggregator import build_report as build_system_health_report
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -299,6 +300,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "dispatch": dispatch_adapter.status().model_dump(),
         }
 
+    # ------------------------------------------------------------ system health
+    @app.get("/api/v1/vanguard/system-health")
+    def system_health():
+        """One real check per real internal subsystem (vanguard/system_health/
+        aggregator.py), assembled server-side into a single honestly-timestamped
+        snapshot for the /system-health operator page. Read-only, unauthenticated,
+        same posture as /health and /integrations."""
+        report = build_system_health_report(
+            db=db,
+            processes=processes,
+            jobs=jobs,
+            mesh=mesh,
+            steward=steward_adapter,
+            watchtower=watchtower_adapter,
+            marshal=marshal_adapter,
+            dispatch=dispatch_adapter,
+            readiness_store=readiness_store,
+            audit=audit,
+        )
+        return report.model_dump()
+
     # ------------------------------------------------------------------ jobs
     @app.get("/api/v1/vanguard/jobs")
     def list_jobs(state: str | None = None, job_type: str | None = None):
@@ -384,6 +406,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "limit": limit,
             "offset": offset,
         }
+
+    # --------------------------------------------------------- system health
+    @app.get("/api/v1/vanguard/system-health")
+    def system_health():
+        """Aggregate System Health snapshot: one real check per subsystem
+        (API/Database/Jobs/Service Control/Mesh/Integrations/Readiness/Audit),
+        run fresh on every call — see vanguard/system_health/aggregator.py for
+        why this is a single server-side aggregation rather than six-plus
+        separate client calls."""
+        report = build_system_health_report(
+            db=db,
+            processes=processes,
+            jobs=jobs,
+            mesh=mesh,
+            steward=steward_adapter,
+            watchtower=watchtower_adapter,
+            marshal=marshal_adapter,
+            dispatch=dispatch_adapter,
+            readiness_store=readiness_store,
+            audit=audit,
+        )
+        return report.model_dump()
 
     return app
 
