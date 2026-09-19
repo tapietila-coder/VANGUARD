@@ -387,3 +387,43 @@ class SystemHealthReport(StrictModel):
     schema_version: Literal[1] = 1
     rows: list[SystemHealthRow]
     generated_at: str = Field(default_factory=utcnow)
+
+
+# --------------------------------------------------------------------------
+# Backups / restore (vanguard/backup/)
+#
+# A real, self-contained backup bundle (backup-<timestamp>.zip under
+# backup_dir) built from a real SQLite online backup
+# (`sqlite3.Connection.backup()`, never a raw file copy of a live db).
+# `sha256`/`size_bytes` are always computed from the actual bundle on disk at
+# creation time; nothing here is ever fabricated. `file_exists` is computed
+# fresh at read time (never stored) so a row whose file was deleted outside
+# VANGUARD is reported honestly rather than silently hidden.
+# --------------------------------------------------------------------------
+
+class BackupRecord(StrictModel):
+    schema_version: Literal[1] = 1
+    backup_id: str = Field(min_length=1, max_length=128)
+    filename: str = Field(min_length=1, max_length=255)
+    path: str = Field(min_length=1, max_length=1000)
+    size_bytes: int = Field(ge=0)
+    sha256: str = Field(min_length=64, max_length=64)
+    source_db_path: str = Field(min_length=1, max_length=1000)
+    reason: str = Field(default="", max_length=200)
+    created_at: str = Field(default_factory=utcnow)
+    file_exists: bool = True
+
+
+class BackupCreateRequest(StrictModel):
+    reason: str = Field(default="manual", max_length=200)
+
+
+class RestoreResult(StrictModel):
+    """Real outcome of a completed restore. `safety_snapshot_id` is always a
+    real backup of the live db taken immediately before the overwrite — never
+    optional, never skipped — so an operator can always undo a restore."""
+    schema_version: Literal[1] = 1
+    restored_backup_id: str
+    safety_snapshot_id: str
+    verified_sha256: str
+    restored_at: str = Field(default_factory=utcnow)

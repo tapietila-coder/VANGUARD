@@ -17,6 +17,7 @@ def settings(tmp_path):
         dispatch_base_url="http://127.0.0.1:8787",
         mesh_provider="null",
         node_stale_after_seconds=300,
+        backup_dir=str(tmp_path / "backups"),
     )
 
 
