@@ -217,3 +217,24 @@ export interface LogSource {
   last_modified: string | null;
   line_count: number | null;
 }
+
+// System Health (aggregate): mirrors vanguard/core/models.py's
+// SystemHealthRow/SystemHealthReport. `status` is intentionally a plain
+// string, not one shared union — each row reuses whichever native status
+// vocabulary that subsystem already has elsewhere in this API/UI (ProcessState,
+// MeshConnectionStatus, IntegrationStatus, ReadinessState, or "OK"/"DEGRADED"/
+// "FAILED" for the generic checks), so StatusBadge's existing color coding
+// applies unchanged.
+export interface SystemHealthRow {
+  schema_version: 1;
+  subsystem: string;
+  status: string;
+  detail: string;
+  checked_at: string;
+}
+
+export interface SystemHealthReport {
+  schema_version: 1;
+  rows: SystemHealthRow[];
+  generated_at: string;
+}

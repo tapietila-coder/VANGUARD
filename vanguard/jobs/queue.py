@@ -38,11 +38,33 @@ class JobQueue:
         self.store = JobStore(db)
         self.deps = deps
         self.registry = registry if registry is not None else JOB_REGISTRY
+        self.worker_count = max(1, worker_count)
         self.executor = ThreadPoolExecutor(
-            max_workers=max(1, worker_count), thread_name_prefix="vanguard-job"
+            max_workers=self.worker_count, thread_name_prefix="vanguard-job"
         )
         self._cancel_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
+
+    # --------------------------------------------------------------- health
+    def worker_status(self) -> dict:
+        """Real introspection for System Health: configured worker count
+        (from construction, never guessed), how many worker threads are
+        actually alive right now (ThreadPoolExecutor only spawns threads
+        lazily on first submission, so 0 alive with 0 queued/running is a
+        normal idle state, not a failure), and real current QUEUED/RUNNING
+        job counts from the same store every other route reads."""
+        # `_threads` is a private ThreadPoolExecutor attribute but is the only
+        # way to observe real live worker threads rather than the configured
+        # pool size; documented here rather than hidden.
+        alive_threads = sum(1 for t in getattr(self.executor, "_threads", set()) if t.is_alive())
+        queued = len(self.store.list(state="QUEUED"))
+        running = len(self.store.list(state="RUNNING"))
+        return {
+            "configured_workers": self.worker_count,
+            "alive_threads": alive_threads,
+            "queued": queued,
+            "running": running,
+        }
 
     # ------------------------------------------------------------ submission
     def submit(self, job_type: str, params: dict, requested_by: str = "", max_retries: int = 1) -> Job:
