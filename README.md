@@ -101,7 +101,39 @@ See `VANGUARD_DISCOVERY.md` for the Mission-0 discovery pass this build is based
   page (added to the top nav) renders one dense row per subsystem with a
   manual refresh control, and follows this project's honest "whole page says
   API unreachable" pattern exactly if the backend can't be reached.
-- 58 pytest tests, all passing locally (see "Test results" below).
+- **Backups / restore** (`vanguard/backup/`): real, self-contained
+  `data/backups/backup-<timestamp>.zip` bundles of VANGUARD's own SQLite
+  database — built with the real SQLite online backup API
+  (`sqlite3.Connection.backup()`), never a raw file copy of a live db, so the
+  copy is consistent even while the app is serving other requests. Real
+  metadata (size, sha256, source db path, reason, timestamp) is written as a
+  JSON sidecar file next to each bundle — **not** a table inside VANGUARD's
+  own db — because a restore replaces that whole db file, which would
+  silently roll back a backups table living inside it too (found for real
+  while building this; see `vanguard/backup/manager.py`'s module docstring).
+  Creation is wired into the existing Job Queue as job type `backup_create`
+  (`POST /backups` submits that job and returns it, same shape as every other
+  job); restore is too destructive for the background queue, so
+  `POST /backups/{id}/restore` is its own synchronous, bearer-token-protected
+  route that (1) verifies the bundle's sha256 checksum before touching
+  anything and refuses on mismatch, (2) takes a real safety-snapshot backup
+  of the current live db first, then (3) closes/reopens VANGUARD's one shared
+  SQLite connection under its lock to swap the file in
+  (`Database.restore_from()`). **Honest limitation:** this only serializes
+  against other requests going through that same `Database` instance — which
+  is every real read/write path in this codebase — not against a second,
+  separate OS process holding its own handle on the db file; for full safety
+  stop the service before restoring in anything beyond this local single-node
+  posture. Simple retention (keep the most recent `VANGUARD_BACKUP_RETAIN_COUNT`
+  manual/job-triggered backups, default 10; automatic pre-restore safety
+  snapshots are exempt so a restore's own undo point can never be pruned) runs
+  after every non-safety-snapshot backup. This backs up VANGUARD's own local
+  db only — not a general backup product, not cloud storage; `data/logs/` was
+  deliberately left out of scope (see "What is NOT implemented"). A new
+  `/backups` UI page (added to the top nav) lists real backups with a
+  "Create Backup" action, and per-row Restore/Delete actions behind the same
+  confirm-before-disrupt pattern Service Control uses for Stop/Restart.
+- 73 pytest tests, all passing locally (see "Test results" below).
 
 ## What is NOT implemented / not claimed
 
@@ -131,6 +163,15 @@ See `VANGUARD_DISCOVERY.md` for the Mission-0 discovery pass this build is based
   the local machine it runs on.
 - Single-node SQLite storage — same reference-implementation posture as Dispatch,
   not a distributed/multi-node system.
+- **Backups only cover VANGUARD's own SQLite database file**, not
+  `data/logs/` (skipped: real log files can be open/appended-to on Windows at
+  backup time, and including them correctly would need its own rotation-aware
+  handling — an honest, deliberate cut, not an oversight) and not any other
+  project's data. Restore's safety guarantee only extends to requests going
+  through VANGUARD's own single shared `Database` connection — not to a
+  second OS process independently holding the db file open. No scheduled/
+  automatic backups; every backup is operator-triggered (via the API/UI or a
+  restore's own automatic pre-restore safety snapshot).
 
 ## Run it locally (PowerShell)
 
@@ -156,7 +197,7 @@ The API is then at `http://127.0.0.1:8788`. FastAPI's interactive docs are at
 ### Test results (this build)
 
 ```
-58 passed, 2 warnings in 32.43s
+73 passed, 2 warnings in 36.02s
 ```
 
 The 2 warnings are upstream FastAPI/Starlette deprecation notices unrelated to
@@ -185,6 +226,8 @@ GET /api/v1/vanguard/jobs?state=&job_type=
 GET /api/v1/vanguard/jobs/{id}
 GET /api/v1/vanguard/logs
 GET /api/v1/vanguard/system-health
+GET /api/v1/vanguard/backups
+GET /api/v1/vanguard/backups/{id}
 ```
 
 Mutating, require `Authorization: Bearer <VANGUARD_API_TOKEN>`:
@@ -202,7 +245,22 @@ POST   /api/v1/vanguard/services/{id}/restart
 POST   /api/v1/vanguard/jobs
 POST   /api/v1/vanguard/jobs/{id}/cancel
 POST   /api/v1/vanguard/jobs/{id}/retry
+POST   /api/v1/vanguard/backups
+POST   /api/v1/vanguard/backups/{id}/restore
+DELETE /api/v1/vanguard/backups/{id}
 ```
+
+`POST /backups` is **job-queue-based, not synchronous-direct**: it submits a
+real `backup_create` job (same registry as `readiness_sweep`/etc. — see
+below) and returns that job with `202`; poll `GET /jobs/{id}` for completion,
+whose `result` is the real `BackupRecord`. This was chosen so backup creation
+reports progress/result/error through the exact same mechanism every other
+real job type already uses, rather than inventing a second pattern.
+`POST /backups/{id}/restore` is the opposite choice — **synchronous**,
+because restore is destructive enough that it must run to completion (or
+fail) within one request rather than be picked up later by a background
+worker; see "What is actually implemented" above for the full restore safety
+sequence and its one honest limitation.
 
 Service Control is only registered for `service_id=dispatch` in this build.
 `VANGUARD_DISPATCH_DIR`/`VANGUARD_DISPATCH_PYTHON` (see `.env.example`) control
@@ -211,10 +269,15 @@ where it's launched from; both default to the real on-disk sibling layout
 
 The Job Queue's real registered `job_type` values are `readiness_sweep`,
 `service_health_check` (params: `{"service_id": "..."}`), `audit_log_export`
-(params: optional `{"limit": 1000}`), and the test-only diagnostic
-`queue_selftest`. `POST /jobs` rejects any other `job_type` with `400`.
+(params: optional `{"limit": 1000}`), `backup_create` (params: optional
+`{"reason": "manual"}`), and the test-only diagnostic `queue_selftest`.
+`POST /jobs` rejects any other `job_type` with `400`.
 `VANGUARD_JOB_WORKERS`/`VANGUARD_JOB_EXPORT_DIR` (see `.env.example`) control
 worker-pool size and where `audit_log_export` writes its snapshots.
+`VANGUARD_BACKUP_DIR` (default `./data/backups`) and
+`VANGUARD_BACKUP_RETAIN_COUNT` (default `10`) control where backup bundles
+land and how many manual/job-triggered ones are kept before the oldest are
+pruned; automatic pre-restore safety snapshots are exempt from that count.
 
 `GET /jobs` returns a bare list of jobs. `GET /audit` returns
 `{"entries": [...], "total": <int>, "limit": <int>, "offset": <int>}` — a
