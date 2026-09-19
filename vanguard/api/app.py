@@ -7,10 +7,12 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Header, HTTPException
 
 from ..audit.writer import AuditWriter
+from ..backup.manager import BackupFileMissingError, BackupManager, ChecksumMismatchError
 from ..core.config import Settings
 from ..core.db import Database
 from ..core.models import (
     AuditEntry,
+    BackupCreateRequest,
     JobSubmit,
     ManagedProcessConfig,
     NodeRegister,
@@ -60,9 +62,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         )
 
+    # Backups / restore: real sqlite3-online-backup bundles of VANGUARD's own
+    # db under data/backups/. Creation is wired into the Job Queue below
+    # (job_type "backup_create"); restore is deliberately its own synchronous,
+    # bearer-token-protected route — too destructive for the background queue.
+    backups = BackupManager(db, backup_dir=cfg.backup_dir, retain_count=cfg.backup_retain_count)
+
     # Job Queue: real local ThreadPoolExecutor-backed execution of the
     # registered job types (vanguard/jobs/job_types.py), acting on the exact
-    # same live nodes/services/processes/audit objects wired above.
+    # same live nodes/services/processes/audit/backups objects wired above.
     job_deps = JobDeps(
         nodes=nodes,
         services=services,
@@ -70,6 +78,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         readiness_store=readiness_store,
         audit=audit,
         export_dir=cfg.job_export_dir,
+        backups=backups,
     )
     jobs = JobQueue(db, job_deps, registry=JOB_REGISTRY, worker_count=cfg.job_worker_count)
 
@@ -91,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.mesh = mesh
     app.state.processes = processes
     app.state.jobs = jobs
+    app.state.backups = backups
 
     def operator(authorization: str | None = Header(default=None)):
         if not authorization or not authorization.startswith("Bearer ") or not hmac.compare_digest(
@@ -384,6 +394,76 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         )
         return after.model_dump()
+
+    # --------------------------------------------------------------- backups
+    @app.get("/api/v1/vanguard/backups")
+    def list_backups():
+        return [b.model_dump() for b in backups.list_backups()]
+
+    @app.get("/api/v1/vanguard/backups/{backup_id}")
+    def get_backup(backup_id: str):
+        record = backups.get_backup(backup_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Backup not found")
+        return record.model_dump()
+
+    @app.post("/api/v1/vanguard/backups", dependencies=[Depends(operator)], status_code=202)
+    def create_backup(body: BackupCreateRequest = BackupCreateRequest()):
+        """Submits a real `backup_create` job to the existing Job Queue and
+        returns the job (job-queue-based, not synchronous-direct, so an
+        operator gets progress/result the same way every other real job type
+        already reports it — see vanguard/jobs/job_types.py). Poll
+        GET /jobs/{id} for completion; the finished job's `result` is the
+        real BackupRecord."""
+        job = jobs.submit(
+            job_type="backup_create", params={"reason": body.reason}, requested_by="operator", max_retries=0
+        )
+        audit.write(
+            AuditEntry(
+                actor="operator", action="backup.create.submit", target=job.job_id, source="api",
+                after=job.model_dump(), reason=body.reason,
+            )
+        )
+        return job.model_dump()
+
+    @app.post("/api/v1/vanguard/backups/{backup_id}/restore", dependencies=[Depends(operator)])
+    def restore_backup(backup_id: str, reason: str = ""):
+        """Synchronous, not job-queue-based — restore is destructive enough
+        that it must run to completion (or fail) within this one request, not
+        be picked up later by a background worker. See
+        vanguard/backup/manager.py for the exact checksum-verify /
+        safety-snapshot / connection-swap sequence."""
+        before_record = backups.get_backup(backup_id)
+        try:
+            result = backups.restore_backup(backup_id, reason=reason)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Backup not found")
+        except BackupFileMissingError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except ChecksumMismatchError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        audit.write(
+            AuditEntry(
+                actor="operator", action="backup.restore", target=backup_id, source="api",
+                before=before_record.model_dump() if before_record else None,
+                after=result.model_dump(), reason=reason,
+            )
+        )
+        return result.model_dump()
+
+    @app.delete("/api/v1/vanguard/backups/{backup_id}", dependencies=[Depends(operator)])
+    def delete_backup(backup_id: str, reason: str = ""):
+        before_record = backups.get_backup(backup_id)
+        if before_record is None:
+            raise HTTPException(status_code=404, detail="Backup not found")
+        deleted = backups.delete_backup(backup_id)
+        audit.write(
+            AuditEntry(
+                actor="operator", action="backup.delete", target=backup_id, source="api",
+                before=before_record.model_dump(), reason=reason,
+            )
+        )
+        return {"deleted": deleted, "backup_id": backup_id}
 
     # ----------------------------------------------------------------- audit
     @app.get("/api/v1/vanguard/audit", dependencies=[Depends(operator)])
