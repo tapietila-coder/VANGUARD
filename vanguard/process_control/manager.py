@@ -165,6 +165,48 @@ class ProcessController:
             row = cur.fetchone()
         return ManagedProcessConfig.model_validate(loads(row["config"])) if row else None
 
+    def list_configs(self) -> list[ManagedProcessConfig]:
+        """Every real managed process ever registered (via `register()`),
+        regardless of current run state — used by the Logs page to know which
+        services have a real captured log file at all."""
+        with self.db.cursor() as cur:
+            cur.execute("SELECT config FROM managed_processes ORDER BY service_id")
+            rows = cur.fetchall()
+        return [ManagedProcessConfig.model_validate(loads(row["config"])) for row in rows]
+
+    def log_sources(self) -> list[dict]:
+        """One real row per registered managed process describing its actual
+        on-disk log file: whether it exists yet, its size, last-modified time,
+        and a real line count (never fabricated — a process with no captured
+        output yet reports exists=False rather than a fake empty file)."""
+        out = []
+        for cfg in self.list_configs():
+            runtime = self._get_runtime(cfg.service_id)
+            log_path = self._log_path(cfg.service_id)
+            exists = log_path.exists()
+            size_bytes = None
+            last_modified = None
+            line_count = None
+            if exists:
+                stat = log_path.stat()
+                size_bytes = stat.st_size
+                last_modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+                with open(log_path, "rb") as f:
+                    line_count = sum(1 for _ in f)
+            out.append(
+                {
+                    "service_id": cfg.service_id,
+                    "name": cfg.name,
+                    "state": runtime.get("state") or ProcessState.UNKNOWN.value,
+                    "log_path": str(log_path),
+                    "exists": exists,
+                    "size_bytes": size_bytes,
+                    "last_modified": last_modified,
+                    "line_count": line_count,
+                }
+            )
+        return out
+
     def _get_runtime(self, service_id: str) -> dict:
         with self.db.cursor() as cur:
             cur.execute("SELECT runtime FROM managed_processes WHERE service_id = ?", (service_id,))

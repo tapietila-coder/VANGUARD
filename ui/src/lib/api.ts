@@ -12,7 +12,11 @@ export type ApiResult<T> =
   | { ok: false; unreachable: true; error: string }
   | { ok: false; unreachable: false; status: number; error: string };
 
-export async function apiGet<T>(path: string, params?: Record<string, string>): Promise<ApiResult<T>> {
+export async function apiGet<T>(
+  path: string,
+  params?: Record<string, string>,
+  opts?: { auth?: boolean }
+): Promise<ApiResult<T>> {
   const url = new URL(`${API_PREFIX}${path}`, VANGUARD_API_BASE);
   if (params) {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
@@ -20,7 +24,13 @@ export async function apiGet<T>(path: string, params?: Record<string, string>): 
 
   let res: Response;
   try {
-    res = await fetch(url.toString(), { cache: "no-store" });
+    res = await fetch(url.toString(), {
+      cache: "no-store",
+      // Server-only: only set when the caller (an API proxy route) needs the
+      // one auth-required read route (GET /audit). Never sent from a client
+      // component — VANGUARD_API_TOKEN is only readable in server code.
+      ...(opts?.auth ? { headers: { Authorization: `Bearer ${VANGUARD_API_TOKEN}` } } : {}),
+    });
   } catch {
     return {
       ok: false,

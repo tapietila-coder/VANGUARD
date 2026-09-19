@@ -186,3 +186,34 @@ export interface Job {
   started_at: string | null;
   finished_at: string | null;
 }
+
+export interface AuditEntry {
+  schema_version: 1;
+  entry_id: number | null;
+  actor: string;
+  action: string;
+  target: string;
+  source: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  reason: string;
+  created_at: string;
+}
+
+export interface AuditLogResponse {
+  entries: AuditEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface LogSource {
+  service_id: string;
+  name: string;
+  state: ProcessState;
+  log_path: string;
+  exists: boolean;
+  size_bytes: number | null;
+  last_modified: string | null;
+  line_count: number | null;
+}

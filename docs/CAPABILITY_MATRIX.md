@@ -14,8 +14,8 @@ NOT_CONNECTED/UNKNOWN) · **NONE** (nothing built).
 | Readiness evaluation | `vanguard/readiness/` | `/readiness`, node detail | LIVE | More profiles as real workloads need them |
 | Service registry | `vanguard/service_map/` | `/services` | LIVE | — |
 | Service control (start/stop/restart) | `vanguard/process_control/` | `/services` control panel | LIVE | Only one process managed (Dispatch); no fleet, no systemd/Docker adapters |
-| Job queue / workers | `vanguard/jobs/` *(in progress — see add-job-queue branch)* | `/jobs` *(in progress)* | IN PROGRESS | Only 3 job types wired to real existing logic; no distributed workers, no external broker |
-| Audit log | `vanguard/audit/` | `GET /audit` (no dedicated UI page yet) | PARTIAL | No `/audit` UI page — only reachable via raw API today |
+| Job queue / workers | `vanguard/jobs/` | `/jobs` | LIVE | Only 3 job types wired to real existing logic; no distributed workers, no external broker |
+| Audit log | `vanguard/audit/` (now with actor/action/target/since/until filtering + limit/offset pagination) | `/audit` | LIVE | Filters are exact-match, not fuzzy search; single shared operator token, no per-user actor identity yet |
 | Mesh networking (NetBird) | `vanguard/mesh/` (`NullMeshProvider` + `NetBirdMeshProvider` contract) | `/mesh` | STUB | No real NetBird deployment anywhere; requires separate authorization to touch production infra |
 | Machines (remote) | — | — | NONE | No remote agent protocol; VANGUARD only ever sees its own host |
 | Browser automation fleet | — | — | NONE | Not attempted; would require Playwright + a real browser-pool design |
@@ -30,7 +30,7 @@ NOT_CONNECTED/UNKNOWN) · **NONE** (nothing built).
 | Watchtower integration | `WatchtowerAdapter` | Overview page shows real NOT_CONNECTED | STUB | Watchtower doesn't exist anywhere in this environment |
 | Marshal integration | `MarshalAdapter` | Overview page shows real NOT_CONNECTED | STUB | Marshal doesn't exist anywhere in this environment |
 | Dispatch integration | `DispatchAdapter` — real `/health` probe | Overview page shows real live status | LIVE | Read-only; Service Control (above) now covers the write side for this one process |
-| Logs (centralized) | Per-service log files under `data/logs/` (via process_control) | Inline log viewer on Service Control panel only | PARTIAL | No cross-service `/logs` page, no search/filter, no correlation IDs |
+| Logs (centralized) | Per-service log files under `data/logs/` (via process_control), plus new `GET /logs` cross-service index (exists/size/last-modified/line-count per registered process) | `/logs` — pick any registered service, tail it, client-side substring filter on the loaded tail | LIVE | Only covers services registered with Service Control (just Dispatch today); no correlation IDs, no server-side full-text search — client-side substring filter on the currently-loaded tail only |
 | Metrics / observability | — | — | NONE | Not attempted; CPU/RAM/GPU exist in `nodeops` detection but aren't graphed anywhere |
 | System Health (aggregate) | Implicit via `/health` + `/integrations` | Overview page aggregates some of this | PARTIAL | No single first-class System Health page covering every subsystem's own health check |
 
@@ -39,7 +39,8 @@ NOT_CONNECTED/UNKNOWN) · **NONE** (nothing built).
 1. Core (nodes/readiness/service-map/mesh-stub/integrations-stub) — LIVE, `v0.1.0`.
 2. UI dashboard — LIVE.
 3. Service Control (real Dispatch process control) — LIVE.
-4. Job Queue + Jobs UI — IN PROGRESS.
+4. Job Queue + Jobs UI — LIVE.
+5. Audit + Logs UI (`/audit`, `/logs`) — LIVE.
 
 ## What this matrix deliberately does not claim
 
