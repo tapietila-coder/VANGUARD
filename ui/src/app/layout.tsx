@@ -24,6 +24,7 @@ const NAV = [
   { href: "/mesh", label: "MESH" },
   { href: "/services", label: "SERVICES" },
   { href: "/readiness", label: "READINESS" },
+  { href: "/jobs", label: "JOBS" },
 ];
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

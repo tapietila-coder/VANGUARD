@@ -50,15 +50,36 @@ See `VANGUARD_DISCOVERY.md` for the Mission-0 discovery pass this build is based
   `health_url` is configured, PID liveness otherwise). This is one
   controllable local process, not a general process-management platform —
   see "What is NOT implemented" below.
-- 29 pytest tests, all passing locally (see "Test results" below).
+- **Job Queue** (`vanguard/jobs/`): a real local, in-process job system — a
+  small `ThreadPoolExecutor` (default 2 workers, `VANGUARD_JOB_WORKERS`)
+  actually runs submitted jobs on worker threads, with durable SQLite job
+  records (state, progress, result, error, retry count), real cooperative
+  cancel, and real retry of failed jobs. Three real job types are registered,
+  each calling functionality that already exists elsewhere in this codebase —
+  no job type fakes its result: `readiness_sweep` (re-runs the readiness
+  engine for every node against every built-in profile), `service_health_check`
+  (real process-control status or an HTTP probe for one service), and
+  `audit_log_export` (writes a real JSON snapshot of the audit log to
+  `data/exports/`). A fourth, `queue_selftest`, is a small diagnostic-only job
+  type used by the test suite to exercise cancel/retry deterministically — not
+  a claimed operator capability. This is a local in-process job queue, not a
+  general workflow engine — see "What is NOT implemented" below.
+- 39 pytest tests, all passing locally (see "Test results" below).
 
 ## What is NOT implemented / not claimed
 
 - **Service Control only manages one process (Dispatch).** It is not a
-  general process-management platform — no fleet of agents, no job queues, no
-  browser fleet, no ingest pipelines, no deployments/incidents/alerts/secrets/
-  backups/mesh-wide RBAC. Those were explicitly descoped from this pass; see
-  the original 15-subsystem spec this build deliberately did not attempt.
+  general process-management platform — no fleet of agents, no browser fleet,
+  no ingest pipelines, no deployments/incidents/alerts/secrets/backups/mesh-wide
+  RBAC. Those were explicitly descoped from this pass; see the original
+  15-subsystem spec this build deliberately did not attempt.
+- **The Job Queue is a local in-process ThreadPoolExecutor, not a distributed
+  queue.** No Redis/external broker, no multi-node workers, no scheduled/
+  recurring jobs, no priorities/queues-of-queues, no persistence across a
+  process crash mid-job (a `RUNNING` job whose process dies stays `RUNNING`
+  in the DB until an operator notices — no crash-recovery sweep exists yet).
+  Only three real job types are registered; adding a new one always means
+  wiring it to real existing VANGUARD logic, never a placeholder.
 - **No D27HQ nav integration** for the new `ui/` dashboard, and no
   VANGUARD/RANGER preservation work bundled with it.
 - **No real NetBird deployment.** No mesh is installed anywhere; `NullMeshProvider`
@@ -98,7 +119,7 @@ The API is then at `http://127.0.0.1:8788`. FastAPI's interactive docs are at
 ### Test results (this build)
 
 ```
-29 passed, 2 warnings in 5.76s
+39 passed, 2 warnings in 6.83s
 ```
 
 The 2 warnings are upstream FastAPI/Starlette deprecation notices unrelated to
@@ -123,6 +144,8 @@ GET /api/v1/vanguard/readiness
 GET /api/v1/vanguard/integrations
 GET /api/v1/vanguard/services/{id}/process
 GET /api/v1/vanguard/services/{id}/logs?lines=100
+GET /api/v1/vanguard/jobs?state=&job_type=
+GET /api/v1/vanguard/jobs/{id}
 ```
 
 Mutating, require `Authorization: Bearer <VANGUARD_API_TOKEN>`:
@@ -137,6 +160,9 @@ GET    /api/v1/vanguard/audit
 POST   /api/v1/vanguard/services/{id}/start
 POST   /api/v1/vanguard/services/{id}/stop
 POST   /api/v1/vanguard/services/{id}/restart
+POST   /api/v1/vanguard/jobs
+POST   /api/v1/vanguard/jobs/{id}/cancel
+POST   /api/v1/vanguard/jobs/{id}/retry
 ```
 
 Service Control is only registered for `service_id=dispatch` in this build.
@@ -144,13 +170,20 @@ Service Control is only registered for `service_id=dispatch` in this build.
 where it's launched from; both default to the real on-disk sibling layout
 (`NCTIAPP/Dispatch/D27HQ_DISPATCH`).
 
+The Job Queue's real registered `job_type` values are `readiness_sweep`,
+`service_health_check` (params: `{"service_id": "..."}`), `audit_log_export`
+(params: optional `{"limit": 1000}`), and the test-only diagnostic
+`queue_selftest`. `POST /jobs` rejects any other `job_type` with `400`.
+`VANGUARD_JOB_WORKERS`/`VANGUARD_JOB_EXPORT_DIR` (see `.env.example`) control
+worker-pool size and where `audit_log_export` writes its snapshots.
+
 ## Source tree
 
 `vanguard/` = the installable package (`core`, `nodeops`, `readiness`,
-`service_map`, `process_control`, `mesh`, `integrations`, `audit`, `api`).
-`tests/` = pytest suite. `docs/` = architecture, mesh, readiness, and security
-notes. `VANGUARD_DISCOVERY.md` = the Mission-0 ground-truth audit this build
-is based on.
+`service_map`, `process_control`, `jobs`, `mesh`, `integrations`, `audit`,
+`api`). `tests/` = pytest suite. `docs/` = architecture, mesh, readiness, and
+security notes. `VANGUARD_DISCOVERY.md` = the Mission-0 ground-truth audit
+this build is based on.
 
 ## Follow-up (explicitly out of scope for this pass)
 
@@ -160,14 +193,20 @@ is based on.
 3. Remote node enrollment (Windows/GPU workers beyond the local machine).
 4. Multi-node storage (Postgres) if VANGUARD ever needs to run distributed.
 5. UI follow-up: no login/token UI, no cloud deployment of `ui/`, and no
-   D27HQ-wide nav shell integration — the `/services` page now has one real
-   write action (Service Control's start/stop/restart for `dispatch`), see
+   D27HQ-wide nav shell integration — the `/services` and `/jobs` pages are
+   the only ones with real write actions (Service Control's
+   start/stop/restart, and Job Queue's submit/cancel/retry), see
    `ui/README.md` for the current page set and what it still doesn't do.
 6. Service Control follow-up: only Dispatch is registered; no fleet of
    managed processes, no auto-restart-on-crash policy, no adoption of a
    process started outside VANGUARD without `psutil` installed (documented
    limitation in `vanguard/process_control/manager.py`), no process control
    for any node other than this local machine.
+7. Job Queue follow-up: no crash-recovery sweep for a `RUNNING` job whose
+   worker process died, no scheduled/recurring jobs, no per-job timeout, no
+   job priorities, no distributed workers — see "What is NOT implemented"
+   above. Real future consumers (ingest, repo sync, deployments) can register
+   new job types once those capabilities themselves become real.
 
 ## Safety and compatibility
 

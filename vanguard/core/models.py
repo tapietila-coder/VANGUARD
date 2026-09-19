@@ -312,3 +312,49 @@ class IntegrationReport(StrictModel):
     status: IntegrationStatus
     detail: str = ""
     checked_at: str = Field(default_factory=utcnow)
+
+
+# --------------------------------------------------------------------------
+# Jobs (local in-process job queue)
+#
+# A real durable job record for the local ThreadPoolExecutor-backed queue in
+# vanguard/jobs/. Every job actually executes a real registered Python
+# callable against real VANGUARD state (see vanguard/jobs/job_types.py) — no
+# job type here fakes its result. `progress` is a short free-text current-step
+# string (e.g. "node 3/7") rather than a percentage, because none of the real
+# job types below can honestly compute a meaningful 0-100 fraction ahead of
+# time; a free-text step is the honest signal they can actually report.
+# --------------------------------------------------------------------------
+
+class JobState(str, Enum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELED = "CANCELED"
+    RETRYING = "RETRYING"
+
+
+class JobSubmit(StrictModel):
+    """Input contract for submitting a new job. job_type is validated against
+    the real job-type registry by the API layer, not here."""
+    job_type: str = Field(min_length=1, max_length=100)
+    params: dict[str, Any] = Field(default_factory=dict)
+    max_retries: int = Field(default=1, ge=0, le=10)
+
+
+class Job(StrictModel):
+    schema_version: Literal[1] = 1
+    job_id: str = Field(min_length=1, max_length=64)
+    job_type: str = Field(min_length=1, max_length=100)
+    params: dict[str, Any] = Field(default_factory=dict)
+    state: JobState = JobState.QUEUED
+    progress: str = Field(default="", max_length=500)
+    result: dict[str, Any] | None = None
+    error: str | None = Field(default=None, max_length=4000)
+    retries: int = Field(default=0, ge=0)
+    max_retries: int = Field(default=1, ge=0)
+    requested_by: str = Field(default="", max_length=200)
+    created_at: str = Field(default_factory=utcnow)
+    started_at: str | None = None
+    finished_at: str | None = None

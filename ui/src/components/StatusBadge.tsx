@@ -28,6 +28,13 @@ const STATUS_TONE: Record<string, Tone> = {
   // shared fallback
   UNKNOWN: "gray",
   OK: "green",
+  // jobs
+  QUEUED: "gray",
+  RUNNING: "amber",
+  COMPLETED: "green",
+  FAILED: "red",
+  CANCELED: "gray",
+  RETRYING: "amber",
 };
 
 export function StatusBadge({ status }: { status: string }) {

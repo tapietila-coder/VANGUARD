@@ -48,6 +48,26 @@ CREATE TABLE IF NOT EXISTS managed_processes (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS jobs (
+    job_id TEXT PRIMARY KEY,
+    job_type TEXT NOT NULL,
+    params TEXT NOT NULL,
+    state TEXT NOT NULL,
+    progress TEXT NOT NULL DEFAULT '',
+    result TEXT,
+    error TEXT,
+    retries INTEGER NOT NULL DEFAULT 0,
+    max_retries INTEGER NOT NULL DEFAULT 1,
+    requested_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs (state);
+CREATE INDEX IF NOT EXISTS idx_jobs_job_type ON jobs (job_type);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor TEXT NOT NULL,
