@@ -238,3 +238,25 @@ export interface SystemHealthReport {
   rows: SystemHealthRow[];
   generated_at: string;
 }
+
+// Backups / restore: mirrors vanguard/core/models.py's BackupRecord/RestoreResult.
+export interface BackupRecord {
+  schema_version: 1;
+  backup_id: string;
+  filename: string;
+  path: string;
+  size_bytes: number;
+  sha256: string;
+  source_db_path: string;
+  reason: string;
+  created_at: string;
+  file_exists: boolean;
+}
+
+export interface RestoreResult {
+  schema_version: 1;
+  restored_backup_id: string;
+  safety_snapshot_id: string;
+  verified_sha256: string;
+  restored_at: string;
+}
