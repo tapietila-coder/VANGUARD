@@ -49,23 +49,29 @@ VANGUARD_API_BASE=http://127.0.0.1:8788
 - `/mesh` — mesh provider status, peers, routes, policies. With the default
   `NullMeshProvider` this legitimately renders as empty/`NOT_CONNECTED` — that
   is the honest state, not a bug.
-- `/services` — registered services table plus a resolve-by-name form
+- `/services` — registered services table, a resolve-by-name form
   (`GET /services/{id}`, which resolves by `service_id` first and falls back
-  to an exact name match).
+  to an exact name match), and a **Service Control** panel for the one real
+  managed process this build supports (`dispatch`): live state/PID/uptime/
+  health with a "checked Ns ago" freshness indicator, Start/Stop/Restart
+  buttons (Stop/Restart ask for confirmation first — these are real actions on
+  a real local process), and an expandable, manually-refreshed log tail.
 - `/readiness` — the built-in readiness profiles and the most recent
   evaluation results recorded by the backend.
 
 ## What this UI does NOT do
 
-- No login/token UI. Every page here only calls **read-only** VANGUARD routes,
-  which the backend deliberately leaves unauthenticated for local dev (see
-  `../docs/SECURITY.md`). If a future page needs a mutating route (anything
-  requiring `Authorization: Bearer <token>`), it must be clearly gated as an
-  advanced/admin action and read the token from `.env.local`
-  (`VANGUARD_API_TOKEN`) — never hardcoded.
+- No login/token UI. Almost every page here only calls **read-only** VANGUARD
+  routes, which the backend deliberately leaves unauthenticated for local dev
+  (see `../docs/SECURITY.md`).
 - No cloud deployment. This is a local `next dev` app only.
-- No write actions anywhere in the current page set — everything here is a
-  read of real backend state.
+- The **only** write actions anywhere in the current page set are Service
+  Control's Start/Stop/Restart on `/services` — everything else is a read of
+  real backend state. Those three actions go through
+  `src/app/api/services/[id]/process/[action]/route.ts`, a server-side proxy
+  that holds `VANGUARD_API_TOKEN` (read from `.env.local`, never sent to the
+  browser) — the same CORS-workaround pattern the resolve-by-name proxy
+  established, extended to also carry the bearer token.
 
 ## Architecture notes
 

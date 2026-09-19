@@ -6,13 +6,18 @@ not a hardened service.
 ## Authentication
 
 - Read-only routes (`GET /api/v1/vanguard/health|nodes|nodes/{id}|nodes/{id}/readiness|
-  services|services/{id}|mesh/status|mesh/peers|mesh/routes|mesh/policies|readiness|integrations`)
+  services|services/{id}|services/{id}/process|services/{id}/logs|mesh/status|
+  mesh/peers|mesh/routes|mesh/policies|readiness|integrations`)
   require **no auth token**. This is a documented dev-only posture — do not expose
   this service on a network where untrusted parties can reach it.
 - Mutating routes (`POST /nodes`, `POST /services`, `POST /mesh/enrollments`,
-  `DELETE /mesh/enrollments/{id}`, `POST /nodes/{id}/revoke`, `GET /audit`) require
-  `Authorization: Bearer <VANGUARD_API_TOKEN>`, compared with `hmac.compare_digest`
-  (constant-time), same pattern as Dispatch's `dispatch/api.py`.
+  `DELETE /mesh/enrollments/{id}`, `POST /nodes/{id}/revoke`, `GET /audit`,
+  `POST /services/{id}/start`, `POST /services/{id}/stop`,
+  `POST /services/{id}/restart`) require `Authorization: Bearer <VANGUARD_API_TOKEN>`,
+  compared with `hmac.compare_digest` (constant-time), same pattern as
+  Dispatch's `dispatch/api.py`. Anyone holding this token can start/stop a
+  real local process — the same single-token posture as every other mutating
+  route in this project, not a separate privilege tier.
 - In `VANGUARD_ENVIRONMENT=dev` (the default) a fallback insecure token is used if
   `VANGUARD_API_TOKEN` is unset, purely so the service can boot with zero config
   for local experimentation. **Any environment other than `dev` requires a real
@@ -46,3 +51,15 @@ The only outbound calls this service makes are:
 
 No calls are made to the production Hetzner VPS (204.168.151.83) or any other
 production D27HQ infrastructure. That remains explicitly out of scope.
+
+## Service Control (process spawning)
+
+`vanguard/process_control/manager.py` spawns a real local child process via
+`subprocess.Popen` with an argv list (never `shell=True`). At spawn time it
+also reads the target project's own `.env` file (e.g.
+`Dispatch/D27HQ_DISPATCH/.env`) purely to build the child's environment —
+mirroring what that project's own README already tells an operator to do by
+hand. It never modifies that file, never logs its contents, and none of it
+enters VANGUARD's own database, audit log, or API responses. Termination is
+graceful (`terminate()`, then a timeout before `kill()`); this project never
+shells out to `taskkill`.

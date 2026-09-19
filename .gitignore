@@ -4,5 +4,6 @@ __pycache__/
 .pytest_cache/
 data/*.db
 data/*.db-journal
+data/logs/
 .env
 *.egg-info/

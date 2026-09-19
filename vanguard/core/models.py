@@ -121,6 +121,58 @@ class ServiceRegister(StrictModel):
 
 
 # --------------------------------------------------------------------------
+# Managed processes (Service Control)
+#
+# A managed process is a superset of a plain `Service` record: it has every
+# field a Service has (id/name/etc.) plus the extra control-plane data needed
+# to actually start/stop/restart a real local OS process (argv, cwd, a
+# health-check URL, and live runtime state). Registering one also upserts a
+# matching row in the plain `services` table via ServiceRegistry, so it shows
+# up in GET /services and resolveService() exactly like any other service —
+# see vanguard/process_control/manager.py for exactly how that's wired.
+# --------------------------------------------------------------------------
+
+class ProcessState(str, Enum):
+    RUNNING = "RUNNING"
+    STOPPED = "STOPPED"
+    STARTING = "STARTING"
+    STOPPING = "STOPPING"
+    FAILED = "FAILED"
+    UNKNOWN = "UNKNOWN"
+
+
+class ManagedProcessConfig(StrictModel):
+    """Registration contract: how to launch/identify a controllable local process."""
+    schema_version: Literal[1] = 1
+    service_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_.-]+$")
+    name: str = Field(min_length=1, max_length=200)
+    working_dir: str = Field(min_length=1, max_length=1000)
+    command: list[str] = Field(min_length=1, max_length=32)
+    health_url: str | None = Field(default=None, max_length=500)
+
+
+class ManagedProcessStatus(StrictModel):
+    """Current, honestly-timestamped control-plane view of a managed process.
+    `last_checked` is always set alongside any reported state/health so a stale
+    read is never presented as a live one."""
+    schema_version: Literal[1] = 1
+    service_id: str
+    name: str
+    working_dir: str
+    command: list[str]
+    health_url: str | None = None
+    state: ProcessState = ProcessState.UNKNOWN
+    pid: int | None = None
+    started_at: str | None = None
+    last_restart_at: str | None = None
+    last_exit_code: int | None = None
+    last_checked: str | None = None
+    healthy: bool | None = None
+    health_detail: str = ""
+    log_path: str | None = None
+
+
+# --------------------------------------------------------------------------
 # Readiness
 # --------------------------------------------------------------------------
 

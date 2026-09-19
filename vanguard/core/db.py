@@ -41,6 +41,13 @@ CREATE TABLE IF NOT EXISTS events (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS managed_processes (
+    service_id TEXT PRIMARY KEY,
+    config TEXT NOT NULL,
+    runtime TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor TEXT NOT NULL,
