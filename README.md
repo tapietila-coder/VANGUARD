@@ -133,7 +133,44 @@ See `VANGUARD_DISCOVERY.md` for the Mission-0 discovery pass this build is based
   `/backups` UI page (added to the top nav) lists real backups with a
   "Create Backup" action, and per-row Restore/Delete actions behind the same
   confirm-before-disrupt pattern Service Control uses for Stop/Restart.
-- 73 pytest tests, all passing locally (see "Test results" below).
+- **Incidents / alerting** (`vanguard/incidents/`): real-time correlation of
+  real failure signals already produced elsewhere in this codebase — readiness
+  evaluations landing in `NOT_READY`/`DEGRADED`, Service Control processes
+  reaching `FAILED` or failing their health check, Job Queue jobs reaching
+  `FAILED`, and the Dispatch integration adapter's real
+  `CONNECTED`→`NOT_CONNECTED` transition — into `Incident` records an operator
+  can see, acknowledge, and track. Wired directly into the exact
+  state-transition points that already exist (`ReadinessStore.save()`,
+  `ProcessController`'s status builder, `JobQueue`'s terminal-state update,
+  `DispatchAdapter.status()`) rather than a periodic poll, so every incident
+  fires at the moment the underlying condition is actually known — see
+  `vanguard/incidents/detector.py`'s module docstring for the honest tradeoff
+  this choice makes. Repeated occurrences of the same underlying condition
+  (same correlation key: e.g. `readiness:<node_id>:<profile_id>`,
+  `service_control:<service_id>`, `job_queue:<job_type>`,
+  `integration:dispatch`) grow one incident's real timeline instead of
+  spawning duplicates; a condition that recovers on its own (readiness back to
+  `READY`/`READY_WITH_WARNING`, a process `RUNNING` and healthy again, the
+  same job_type completing, Dispatch reconnecting) auto-resolves the incident
+  with a real timeline event, while manual acknowledge/resolve
+  (`POST /incidents/{id}/acknowledge`, `POST /incidents/{id}/resolve`, both
+  bearer-token-protected and audit-logged) stay available for cases
+  auto-detection can't confirm. Severity is a real, restrained mapping
+  (`INFO`/`WARNING`/`DEGRADED`/`MAJOR`/`CRITICAL`) — never everything
+  `CRITICAL`: e.g. a `FAILED` process is `CRITICAL`, a `NOT_READY` node is
+  `MAJOR`, a `DEGRADED` node or `FAILED` job is `WARNING`. Steward/Watchtower/
+  Marshal are permanently-stubbed `NOT_CONNECTED` and are **deliberately never
+  wired into detection** — their steady-state NOT_CONNECTED is not a new
+  failure, and alerting on it would be pure noise; only Dispatch, the one
+  integration that can genuinely transition, is wired, and only a real
+  transition (never the initial/steady NOT_CONNECTED state) opens an
+  incident. A new `/incidents` UI page (added to the top nav) lists incidents
+  with severity/status color-coding (reusing the existing `StatusBadge`
+  vocabulary), Acknowledge/Resolve actions behind a confirm step, and
+  click-through to `/incidents/[id]` for the full real timeline; a real "N
+  open incidents" row also appears on `/system-health`, linking back to
+  `/incidents`.
+- 82 pytest tests, all passing locally (see "Test results" below).
 
 ## What is NOT implemented / not claimed
 
@@ -197,7 +234,7 @@ The API is then at `http://127.0.0.1:8788`. FastAPI's interactive docs are at
 ### Test results (this build)
 
 ```
-73 passed, 2 warnings in 36.02s
+82 passed, 2 warnings in ~45-70s
 ```
 
 The 2 warnings are upstream FastAPI/Starlette deprecation notices unrelated to
@@ -228,6 +265,8 @@ GET /api/v1/vanguard/logs
 GET /api/v1/vanguard/system-health
 GET /api/v1/vanguard/backups
 GET /api/v1/vanguard/backups/{id}
+GET /api/v1/vanguard/incidents?status=&severity=
+GET /api/v1/vanguard/incidents/{id}
 ```
 
 Mutating, require `Authorization: Bearer <VANGUARD_API_TOKEN>`:
@@ -248,6 +287,8 @@ POST   /api/v1/vanguard/jobs/{id}/retry
 POST   /api/v1/vanguard/backups
 POST   /api/v1/vanguard/backups/{id}/restore
 DELETE /api/v1/vanguard/backups/{id}
+POST   /api/v1/vanguard/incidents/{id}/acknowledge
+POST   /api/v1/vanguard/incidents/{id}/resolve
 ```
 
 `POST /backups` is **job-queue-based, not synchronous-direct**: it submits a
@@ -292,9 +333,10 @@ or full-text search.
 
 `vanguard/` = the installable package (`core`, `nodeops`, `readiness`,
 `service_map`, `process_control`, `jobs`, `mesh`, `integrations`, `audit`,
-`system_health`, `api`). `tests/` = pytest suite. `docs/` = architecture,
-mesh, readiness, and security notes. `VANGUARD_DISCOVERY.md` = the Mission-0
-ground-truth audit this build is based on.
+`system_health`, `backup`, `incidents`, `api`). `tests/` = pytest suite.
+`docs/` = architecture, mesh, readiness, and security notes.
+`VANGUARD_DISCOVERY.md` = the Mission-0 ground-truth audit this build is
+based on.
 
 ## Follow-up (explicitly out of scope for this pass)
 

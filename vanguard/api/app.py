@@ -13,11 +13,17 @@ from ..core.db import Database
 from ..core.models import (
     AuditEntry,
     BackupCreateRequest,
+    IncidentActionRequest,
+    IncidentEvent,
+    IncidentStatus,
     JobSubmit,
     ManagedProcessConfig,
     NodeRegister,
     ServiceRegister,
+    utcnow,
 )
+from ..incidents.detector import IncidentDetector
+from ..incidents.store import IncidentStore
 from ..integrations.adapters import DispatchAdapter, MarshalAdapter, StewardAdapter, WatchtowerAdapter
 from ..jobs.job_types import JOB_REGISTRY, JobDeps
 from ..jobs.queue import JobQueue
@@ -36,10 +42,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     db = Database(cfg.db_path)
     nodes = NodeInventory(db, stale_after_seconds=cfg.node_stale_after_seconds)
     services = ServiceRegistry(db)
-    readiness_store = ReadinessStore(db)
     audit = AuditWriter(db)
+
+    # Incidents / alerting: real-time correlation of real failure signals
+    # already produced elsewhere (readiness, Service Control, Job Queue, the
+    # Dispatch integration adapter) — see vanguard/incidents/detector.py for
+    # exactly which signals and why. Constructed before the subsystems below
+    # so its observe_* methods can be wired straight into their real
+    # state-transition points (ReadinessStore.save(), ProcessController's
+    # status builder, JobQueue's terminal-state update, DispatchAdapter.status())
+    # rather than polling any of them after the fact.
+    incident_store = IncidentStore(db)
+    incidents = IncidentDetector(incident_store)
+
+    readiness_store = ReadinessStore(db, on_save=incidents.observe_readiness)
     mesh = build_mesh_provider(cfg)
-    dispatch_adapter = DispatchAdapter(cfg.dispatch_base_url)
+    dispatch_adapter = DispatchAdapter(cfg.dispatch_base_url, on_status=incidents.observe_dispatch)
     steward_adapter = StewardAdapter()
     watchtower_adapter = WatchtowerAdapter()
     marshal_adapter = MarshalAdapter()
@@ -50,7 +68,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # (Settings.from_env() always computes real defaults; directly-constructed
     # Settings, as in tests, default them to "" so nothing is auto-registered).
     log_dir = os.path.join(os.path.dirname(cfg.db_path) or ".", "logs")
-    processes = ProcessController(db, services, log_dir=log_dir)
+    processes = ProcessController(db, services, log_dir=log_dir, on_status=incidents.observe_process_status)
     if cfg.dispatch_dir and cfg.dispatch_python:
         processes.register(
             ManagedProcessConfig(
@@ -80,7 +98,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         export_dir=cfg.job_export_dir,
         backups=backups,
     )
-    jobs = JobQueue(db, job_deps, registry=JOB_REGISTRY, worker_count=cfg.job_worker_count)
+    jobs = JobQueue(
+        db, job_deps, registry=JOB_REGISTRY, worker_count=cfg.job_worker_count,
+        on_terminal=incidents.observe_job,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -101,6 +122,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.processes = processes
     app.state.jobs = jobs
     app.state.backups = backups
+    app.state.incidents = incident_store
 
     def operator(authorization: str | None = Header(default=None)):
         if not authorization or not authorization.startswith("Bearer ") or not hmac.compare_digest(
@@ -328,6 +350,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             dispatch=dispatch_adapter,
             readiness_store=readiness_store,
             audit=audit,
+            incidents=incident_store,
         )
         return report.model_dump()
 
@@ -487,27 +510,66 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "offset": offset,
         }
 
-    # --------------------------------------------------------- system health
-    @app.get("/api/v1/vanguard/system-health")
-    def system_health():
-        """Aggregate System Health snapshot: one real check per subsystem
-        (API/Database/Jobs/Service Control/Mesh/Integrations/Readiness/Audit),
-        run fresh on every call — see vanguard/system_health/aggregator.py for
-        why this is a single server-side aggregation rather than six-plus
-        separate client calls."""
-        report = build_system_health_report(
-            db=db,
-            processes=processes,
-            jobs=jobs,
-            mesh=mesh,
-            steward=steward_adapter,
-            watchtower=watchtower_adapter,
-            marshal=marshal_adapter,
-            dispatch=dispatch_adapter,
-            readiness_store=readiness_store,
-            audit=audit,
+    # ------------------------------------------------------------- incidents
+    @app.get("/api/v1/vanguard/incidents")
+    def list_incidents(status: str | None = None, severity: str | None = None):
+        """Real incidents correlated by vanguard/incidents/detector.py from
+        real readiness/Service Control/Job Queue/Dispatch-integration failure
+        signals — never a fabricated alert source. Unauthenticated read, same
+        posture as every other list route."""
+        return [i.model_dump() for i in incident_store.list(status=status, severity=severity)]
+
+    @app.get("/api/v1/vanguard/incidents/{incident_id}")
+    def get_incident(incident_id: str):
+        incident = incident_store.get(incident_id)
+        if incident is None:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        return incident.model_dump()
+
+    @app.post("/api/v1/vanguard/incidents/{incident_id}/acknowledge", dependencies=[Depends(operator)])
+    def acknowledge_incident(incident_id: str, body: IncidentActionRequest = IncidentActionRequest()):
+        incident = incident_store.get(incident_id)
+        if incident is None:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        before = incident.model_dump()
+        now = utcnow()
+        incident.status = IncidentStatus.ACKNOWLEDGED
+        incident.acknowledged_by = "operator"
+        incident.acknowledged_at = now
+        incident.last_seen = now
+        incident.timeline.append(
+            IncidentEvent(kind="acknowledged", detail=body.reason, actor="operator", created_at=now)
         )
-        return report.model_dump()
+        updated = incident_store.update(incident)
+        audit.write(
+            AuditEntry(
+                actor="operator", action="incident.acknowledge", target=incident_id, source="api",
+                before=before, after=updated.model_dump(), reason=body.reason,
+            )
+        )
+        return updated.model_dump()
+
+    @app.post("/api/v1/vanguard/incidents/{incident_id}/resolve", dependencies=[Depends(operator)])
+    def resolve_incident(incident_id: str, body: IncidentActionRequest = IncidentActionRequest()):
+        incident = incident_store.get(incident_id)
+        if incident is None:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        before = incident.model_dump()
+        now = utcnow()
+        incident.status = IncidentStatus.RESOLVED
+        incident.resolved_at = now
+        incident.last_seen = now
+        incident.timeline.append(
+            IncidentEvent(kind="resolved", detail=body.reason, actor="operator", created_at=now)
+        )
+        updated = incident_store.update(incident)
+        audit.write(
+            AuditEntry(
+                actor="operator", action="incident.resolve", target=incident_id, source="api",
+                before=before, after=updated.model_dump(), reason=body.reason,
+            )
+        )
+        return updated.model_dump()
 
     return app
 

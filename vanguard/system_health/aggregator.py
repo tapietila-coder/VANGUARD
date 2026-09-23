@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from ..audit.writer import AuditWriter
 from ..core.db import Database
 from ..core.models import SystemHealthReport, SystemHealthRow
+from ..incidents.store import IncidentStore
 from ..integrations.adapters import DispatchAdapter, MarshalAdapter, StewardAdapter, WatchtowerAdapter
 from ..jobs.queue import JobQueue
 from ..mesh.provider import MeshProvider
@@ -190,6 +191,16 @@ def _audit_row(audit: AuditWriter) -> SystemHealthRow:
         )
 
 
+def _incidents_row(incidents: IncidentStore) -> SystemHealthRow:
+    open_count = incidents.count_open()
+    return SystemHealthRow(
+        subsystem="incidents",
+        status="DEGRADED" if open_count > 0 else "OK",
+        detail=f"{open_count} open incident(s)" if open_count else "no open incidents",
+        checked_at=_now(),
+    )
+
+
 def build_report(
     *,
     db: Database,
@@ -202,6 +213,7 @@ def build_report(
     dispatch: DispatchAdapter,
     readiness_store: ReadinessStore,
     audit: AuditWriter,
+    incidents: IncidentStore,
 ) -> SystemHealthReport:
     """Runs every real subsystem check right now and assembles the report.
     Never returns a cached/previous result — every row's checked_at is set
@@ -215,5 +227,6 @@ def build_report(
         _integrations_row(steward, watchtower, marshal, dispatch),
         _readiness_row(readiness_store),
         _audit_row(audit),
+        _incidents_row(incidents),
     ]
     return SystemHealthReport(rows=rows, generated_at=_now())

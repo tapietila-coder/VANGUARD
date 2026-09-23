@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import type { SystemHealthReport } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
 import { NOT_AVAILABLE } from "@/components/ApiUnreachable";
@@ -19,6 +20,7 @@ const SUBSYSTEM_LABELS: Record<string, string> = {
   integrations: "Integrations",
   readiness: "Readiness",
   audit_log: "Audit Log",
+  incidents: "Incidents",
 };
 
 function secondsAgo(iso: string): string {
@@ -128,9 +130,15 @@ export function SystemHealthPanel({ initial }: { initial: FetchState }) {
             className="flex flex-col gap-2 rounded border border-[var(--border)] bg-black/20 p-3 sm:flex-row sm:items-center sm:justify-between"
           >
             <div className="flex min-w-[220px] items-center gap-3">
-              <span className="font-mono text-sm text-neutral-200">
-                {SUBSYSTEM_LABELS[row.subsystem] ?? row.subsystem}
-              </span>
+              {row.subsystem === "incidents" ? (
+                <Link href="/incidents" className="font-mono text-sm text-neutral-200 underline hover:text-sky-300">
+                  {SUBSYSTEM_LABELS[row.subsystem] ?? row.subsystem}
+                </Link>
+              ) : (
+                <span className="font-mono text-sm text-neutral-200">
+                  {SUBSYSTEM_LABELS[row.subsystem] ?? row.subsystem}
+                </span>
+              )}
               <StatusBadge status={row.status} />
             </div>
             <div className="flex flex-1 flex-col text-xs text-neutral-500 sm:items-end sm:text-right">

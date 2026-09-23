@@ -35,6 +35,15 @@ const STATUS_TONE: Record<string, Tone> = {
   FAILED: "red",
   CANCELED: "gray",
   RETRYING: "amber",
+  // incident severity — a real, restrained escalation (never everything red)
+  INFO: "gray",
+  WARNING: "amber",
+  MAJOR: "red",
+  CRITICAL: "red",
+  // incident status
+  OPEN: "red",
+  ACKNOWLEDGED: "amber",
+  RESOLVED: "green",
 };
 
 export function StatusBadge({ status }: { status: string }) {

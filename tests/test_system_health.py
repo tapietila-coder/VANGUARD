@@ -19,6 +19,7 @@ def test_system_health_route_shape(client):
         "integrations",
         "readiness",
         "audit_log",
+        "incidents",
     }
     for row in body["rows"]:
         assert row["status"]
