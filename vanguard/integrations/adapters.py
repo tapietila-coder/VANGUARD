@@ -17,6 +17,7 @@ import json
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from typing import Callable
 
 from ..core.models import IntegrationReport, IntegrationStatus
 
@@ -81,9 +82,21 @@ class DispatchAdapter:
 
     name = "dispatch"
 
-    def __init__(self, base_url: str = "http://127.0.0.1:8787", timeout_seconds: float = 2.0):
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8787",
+        timeout_seconds: float = 2.0,
+        on_status: Callable[[IntegrationReport], None] | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        # Real-time incident detection hook (vanguard/incidents/detector.py):
+        # fired on every real status() call. Dispatch is the only integration
+        # adapter this is ever wired to — Steward/Watchtower/Marshal are
+        # permanently-stubbed NOT_CONNECTED and deliberately never wired here
+        # (see IncidentDetector's module docstring for why alerting on their
+        # steady-state would be noise).
+        self.on_status = on_status
 
     def status(self) -> IntegrationReport:
         url = f"{self.base_url}/health"
@@ -91,16 +104,19 @@ class DispatchAdapter:
             req = urllib.request.Request(url, headers={"Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
-            return IntegrationReport(
+            report = IntegrationReport(
                 integration=self.name,
                 status=IntegrationStatus.CONNECTED,
                 detail=f"Dispatch reachable at {url}: {body}",
                 checked_at=_now(),
             )
         except (urllib.error.URLError, OSError, TimeoutError, ValueError) as exc:
-            return IntegrationReport(
+            report = IntegrationReport(
                 integration=self.name,
                 status=IntegrationStatus.NOT_CONNECTED,
                 detail=f"Dispatch not reachable at {url} ({exc.__class__.__name__}: {exc})",
                 checked_at=_now(),
             )
+        if self.on_status is not None:
+            self.on_status(report)
+        return report

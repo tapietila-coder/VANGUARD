@@ -427,3 +427,66 @@ class RestoreResult(StrictModel):
     safety_snapshot_id: str
     verified_sha256: str
     restored_at: str = Field(default_factory=utcnow)
+
+
+# --------------------------------------------------------------------------
+# Incidents / alerting (vanguard/incidents/)
+#
+# Correlates REAL failure signals already produced elsewhere in this codebase
+# (readiness NOT_READY/DEGRADED, Service Control FAILED/unhealthy, Job Queue
+# FAILED, Dispatch integration CONNECTED->NOT_CONNECTED) into an Incident an
+# operator can see, acknowledge, and track — never a synthetic/fabricated
+# alert source. `severity` reuses a small, real vocabulary (never labels
+# everything CRITICAL); `status` is the operator-facing lifecycle;
+# `correlation_key` is the grouping key that keeps repeated occurrences of the
+# same underlying condition as ONE incident with a growing `timeline` rather
+# than spamming duplicates — see vanguard/incidents/detector.py for the exact
+# per-signal correlation_key/severity rules.
+# --------------------------------------------------------------------------
+
+class IncidentSeverity(str, Enum):
+    INFO = "INFO"
+    WARNING = "WARNING"
+    DEGRADED = "DEGRADED"
+    MAJOR = "MAJOR"
+    CRITICAL = "CRITICAL"
+
+
+class IncidentStatus(str, Enum):
+    OPEN = "OPEN"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    RESOLVED = "RESOLVED"
+
+
+class IncidentEvent(StrictModel):
+    """One real, timestamped entry in an incident's timeline. `kind` is a
+    short machine tag ("detected", "recurred", "acknowledged",
+    "condition_changed", "auto_resolved", "resolved"); `detail` is a real
+    human-readable description of what was actually observed, never
+    fabricated filler."""
+    kind: str = Field(min_length=1, max_length=50)
+    detail: str = Field(default="", max_length=2000)
+    actor: str = Field(default="", max_length=200)
+    created_at: str = Field(default_factory=utcnow)
+
+
+class Incident(StrictModel):
+    schema_version: Literal[1] = 1
+    incident_id: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=300)
+    severity: IncidentSeverity
+    status: IncidentStatus = IncidentStatus.OPEN
+    source: str = Field(min_length=1, max_length=200)
+    correlation_key: str = Field(min_length=1, max_length=300)
+    first_seen: str = Field(default_factory=utcnow)
+    last_seen: str = Field(default_factory=utcnow)
+    resolved_at: str | None = None
+    acknowledged_by: str | None = None
+    acknowledged_at: str | None = None
+    occurrence_count: int = Field(default=1, ge=1)
+    timeline: list[IncidentEvent] = Field(default_factory=list)
+
+
+class IncidentActionRequest(StrictModel):
+    """Input contract for POST .../acknowledge and .../resolve."""
+    reason: str = Field(default="", max_length=1000)

@@ -89,6 +89,19 @@ CREATE TABLE IF NOT EXISTS health_probe (
     checked_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS incidents (
+    incident_id TEXT PRIMARY KEY,
+    correlation_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents (status);
+CREATE INDEX IF NOT EXISTS idx_incidents_correlation_key ON incidents (correlation_key);
+
 -- NOTE: backup metadata (vanguard/backup/) is deliberately NOT a table here.
 -- A restore replaces this entire db file's contents with an older snapshot,
 -- which would silently roll back any backups-table rows written after that

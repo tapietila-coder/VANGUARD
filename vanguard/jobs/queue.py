@@ -11,6 +11,7 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from typing import Callable
 
 from ..core.db import Database
 from ..core.models import Job, JobState
@@ -34,6 +35,7 @@ class JobQueue:
         deps: JobDeps,
         registry: dict[str, JobCallable] | None = None,
         worker_count: int = 2,
+        on_terminal: Callable[[Job], None] | None = None,
     ):
         self.store = JobStore(db)
         self.deps = deps
@@ -44,6 +46,11 @@ class JobQueue:
         )
         self._cancel_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
+        # Real-time incident detection hook (vanguard/incidents/detector.py):
+        # fired in _run() the moment a job reaches a real terminal state
+        # (COMPLETED/FAILED/CANCELED) — the one place every job execution,
+        # regardless of job_type, ends up.
+        self.on_terminal = on_terminal
 
     # --------------------------------------------------------------- health
     def worker_status(self) -> dict:
@@ -115,9 +122,10 @@ class JobQueue:
                 raise JobCanceled(job_id)
 
         ctx = JobRunContext(job_id=job_id, params=job.params, report_progress=report_progress, deps=self.deps)
+        terminal_job: Job | None = None
         try:
             result = callable_(ctx)
-            self.store.update(
+            terminal_job = self.store.update(
                 job_id,
                 state=JobState.COMPLETED,
                 result=result,
@@ -126,17 +134,22 @@ class JobQueue:
                 progress="completed",
             )
         except JobCanceled:
-            self.store.update(
+            terminal_job = self.store.update(
                 job_id, state=JobState.CANCELED, finished_at=_now(), progress="canceled"
             )
         except Exception as exc:  # noqa: BLE001 - deliberately broad: any job callable may raise
             detail = f"{exc.__class__.__name__}: {exc}"
-            self.store.update(
+            terminal_job = self.store.update(
                 job_id, state=JobState.FAILED, error=detail, finished_at=_now(), progress="failed"
             )
         finally:
             with self._lock:
                 self._cancel_events.pop(job_id, None)
+        # Real-time incident detection: fired after the job row is durably
+        # updated to its real terminal state, outside the try/except above so
+        # a detector error can never be mistaken for the job's own outcome.
+        if self.on_terminal is not None and terminal_job is not None:
+            self.on_terminal(terminal_job)
 
     # --------------------------------------------------------------- control
     def cancel(self, job_id: str) -> Job:

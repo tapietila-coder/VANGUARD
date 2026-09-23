@@ -27,6 +27,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from ..core.db import Database, dumps, loads
 from ..core.models import (
@@ -121,13 +122,25 @@ def _default_runtime() -> dict:
 
 
 class ProcessController:
-    def __init__(self, db: Database, services: ServiceRegistry, log_dir: str):
+    def __init__(
+        self,
+        db: Database,
+        services: ServiceRegistry,
+        log_dir: str,
+        on_status: Callable[["ManagedProcessStatus"], None] | None = None,
+    ):
         self.db = db
         self.services = services
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self._procs: dict[str, subprocess.Popen] = {}
         self._lock = threading.Lock()
+        # Real-time incident detection hook (vanguard/incidents/detector.py):
+        # every real ManagedProcessStatus this controller ever produces —
+        # from start/stop/restart or a plain status() read — is built by
+        # _build_status() below, so that's the one real choke point to
+        # observe from.
+        self.on_status = on_status
 
     # ------------------------------------------------------------ registration
     def register(self, cfg: ManagedProcessConfig) -> ManagedProcessStatus:
@@ -434,7 +447,7 @@ class ProcessController:
 
     # ------------------------------------------------------------------- build
     def _build_status(self, cfg: ManagedProcessConfig, runtime: dict) -> ManagedProcessStatus:
-        return ManagedProcessStatus(
+        status = ManagedProcessStatus(
             service_id=cfg.service_id,
             name=cfg.name,
             working_dir=cfg.working_dir,
@@ -450,3 +463,6 @@ class ProcessController:
             health_detail=runtime.get("health_detail", ""),
             log_path=str(self._log_path(cfg.service_id)),
         )
+        if self.on_status is not None:
+            self.on_status(status)
+        return status

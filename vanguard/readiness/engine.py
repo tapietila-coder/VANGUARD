@@ -1,6 +1,7 @@
 """Deterministic readiness evaluation: given a Node and a ReadinessProfile, produce
 a ReadinessResult with per-check evidence. No randomness, no network calls."""
 from datetime import datetime, timezone
+from typing import Callable
 
 from ..core.db import Database, dumps, loads
 from ..core.models import (
@@ -62,8 +63,14 @@ def evaluate(node: Node, profile: ReadinessProfile) -> ReadinessResult:
 
 
 class ReadinessStore:
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, on_save: Callable[[ReadinessResult], None] | None = None):
         self.db = db
+        # Real-time incident detection hook (vanguard/incidents/detector.py):
+        # every readiness result that gets persisted — from either the single
+        # node API route or the readiness_sweep job — passes through this one
+        # method, so it's the one real choke point to observe from, rather
+        # than duplicating a call at each of that method's callers.
+        self.on_save = on_save
 
     def save(self, result: ReadinessResult) -> ReadinessResult:
         with self.db.cursor() as cur:
@@ -71,6 +78,8 @@ class ReadinessStore:
                 "INSERT INTO readiness_results (node_id, profile_id, data, created_at) VALUES (?, ?, ?, ?)",
                 (result.node_id, result.profile_id, dumps(result.model_dump()), result.evaluated_at),
             )
+        if self.on_save is not None:
+            self.on_save(result)
         return result
 
     def latest_for_node(self, node_id: str) -> list[ReadinessResult]:
