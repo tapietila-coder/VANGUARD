@@ -102,6 +102,19 @@ CREATE TABLE IF NOT EXISTS incidents (
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents (status);
 CREATE INDEX IF NOT EXISTS idx_incidents_correlation_key ON incidents (correlation_key);
 
+-- Real local resource-usage samples (vanguard/metrics/). Same
+-- data-column-plus-a-queryable-column pattern as incidents/jobs above: the
+-- full MetricSample lives as JSON in `data`, with `sampled_at` duplicated
+-- into a real indexed column for real range queries without deserializing
+-- every row.
+CREATE TABLE IF NOT EXISTS metrics_samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    data TEXT NOT NULL,
+    sampled_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_metrics_samples_sampled_at ON metrics_samples (sampled_at);
+
 -- NOTE: backup metadata (vanguard/backup/) is deliberately NOT a table here.
 -- A restore replaces this entire db file's contents with an older snapshot,
 -- which would silently roll back any backups-table rows written after that

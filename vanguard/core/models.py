@@ -490,3 +490,51 @@ class Incident(StrictModel):
 class IncidentActionRequest(StrictModel):
     """Input contract for POST .../acknowledge and .../resolve."""
     reason: str = Field(default="", max_length=1000)
+
+
+# --------------------------------------------------------------------------
+# Metrics / observability (vanguard/metrics/)
+#
+# Real local resource-usage samples for the ONE machine VANGUARD runs on —
+# not a distributed metrics platform, no external time-series DB. CPU% and
+# RAM come from `psutil` when installed (same optional dependency
+# `vanguard/nodeops/detect.py` already uses); when it is not installed those
+# fields are honestly left None rather than guessed, exactly like
+# `detect.py`'s own documented posture. Disk usage uses the stdlib
+# `shutil.disk_usage()` (always available, no optional dependency) against
+# the volume holding VANGUARD's own data directory. GPU utilization/VRAM are
+# deliberately NOT sampled: there is no portable stdlib/psutil way to read
+# them, and `detect.py` already made the same honest call for GPU model/VRAM
+# at node-registration time — this module does not fabricate numbers that
+# capability doesn't actually have.
+# --------------------------------------------------------------------------
+
+class MetricSample(StrictModel):
+    schema_version: Literal[1] = 1
+    cpu_percent: float | None = Field(default=None, ge=0, le=100)
+    ram_used_mb: int | None = Field(default=None, ge=0)
+    ram_total_mb: int | None = Field(default=None, ge=0)
+    disk_used_mb: int = Field(ge=0)
+    disk_total_mb: int = Field(ge=0)
+    disk_path: str = Field(min_length=1, max_length=500)
+    sampled_at: str = Field(default_factory=utcnow)
+
+
+class MetricsCurrentResponse(StrictModel):
+    """What the /metrics page's "current values" readouts render. `sample` is
+    None in the real, honest early-startup window before the collector's
+    first sample has landed — never a fabricated placeholder sample."""
+    schema_version: Literal[1] = 1
+    sample: MetricSample | None
+    collector_running: bool
+    interval_seconds: int
+    sample_count: int
+
+
+class MetricsHistoryResponse(StrictModel):
+    schema_version: Literal[1] = 1
+    samples: list[MetricSample]
+    bucketed: bool
+    interval_seconds: int | None = None
+    since: str | None = None
+    until: str | None = None

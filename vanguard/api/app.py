@@ -18,6 +18,8 @@ from ..core.models import (
     IncidentStatus,
     JobSubmit,
     ManagedProcessConfig,
+    MetricsCurrentResponse,
+    MetricsHistoryResponse,
     NodeRegister,
     ServiceRegister,
     utcnow,
@@ -28,6 +30,9 @@ from ..integrations.adapters import DispatchAdapter, MarshalAdapter, StewardAdap
 from ..jobs.job_types import JOB_REGISTRY, JobDeps
 from ..jobs.queue import JobQueue
 from ..mesh.provider import build_mesh_provider
+from ..metrics.bucketing import bucket_samples
+from ..metrics.collector import MetricsCollector
+from ..metrics.store import MetricsStore
 from ..nodeops.inventory import NodeInventory
 from ..process_control.manager import ProcessController
 from ..readiness.engine import ReadinessStore, evaluate
@@ -86,6 +91,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # bearer-token-protected route — too destructive for the background queue.
     backups = BackupManager(db, backup_dir=cfg.backup_dir, retain_count=cfg.backup_retain_count)
 
+    # Metrics / observability: real local CPU/RAM/disk sampling for this one
+    # machine (vanguard/metrics/). The collector's background thread is
+    # started/stopped from the lifespan handler below, not here — so
+    # constructing an app (as every test does) never spawns a background
+    # thread unless that app is actually served/run under the ASGI lifespan
+    # protocol (uvicorn.run(), or `with TestClient(app) as client:`).
+    metrics_store = MetricsStore(db)
+    metrics_collector = MetricsCollector(
+        metrics_store,
+        db_path=cfg.db_path,
+        interval_seconds=cfg.metrics_interval_seconds,
+        retention_days=cfg.metrics_retention_days,
+    )
+
     # Job Queue: real local ThreadPoolExecutor-backed execution of the
     # registered job types (vanguard/jobs/job_types.py), acting on the exact
     # same live nodes/services/processes/audit/backups objects wired above.
@@ -105,7 +124,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        metrics_collector.start()
         yield
+        metrics_collector.stop(wait=False)
         jobs.shutdown(wait=False)
         db.close()
 
@@ -123,6 +144,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.jobs = jobs
     app.state.backups = backups
     app.state.incidents = incident_store
+    app.state.metrics = metrics_store
+    app.state.metrics_collector = metrics_collector
 
     def operator(authorization: str | None = Header(default=None)):
         if not authorization or not authorization.startswith("Bearer ") or not hmac.compare_digest(
@@ -351,6 +374,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             readiness_store=readiness_store,
             audit=audit,
             incidents=incident_store,
+            metrics=metrics_store,
+            metrics_collector=metrics_collector,
         )
         return report.model_dump()
 
@@ -570,6 +595,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         )
         return updated.model_dump()
+
+    # ------------------------------------------------------------------ metrics
+    @app.get("/api/v1/vanguard/metrics/current")
+    def metrics_current():
+        """The most recent real local CPU/RAM/disk sample (vanguard/metrics/),
+        plus honest collector status. `sample` is None in the real early-
+        startup window before the very first sample has landed — never a
+        fabricated placeholder. Read-only, unauthenticated, same posture as
+        /system-health."""
+        sample = metrics_store.latest()
+        return MetricsCurrentResponse(
+            sample=sample,
+            collector_running=metrics_collector.is_running(),
+            interval_seconds=metrics_collector.interval_seconds,
+            sample_count=metrics_store.count(),
+        ).model_dump()
+
+    @app.get("/api/v1/vanguard/metrics/history")
+    def metrics_history(since: str | None = None, until: str | None = None, interval: int | None = None):
+        """Real stored samples in [since, until] (ISO-8601, same lexical-
+        comparison convention as /audit's since/until), oldest-first. When
+        `interval` (seconds) is given, samples are downsampled into that many
+        real averaged buckets (vanguard/metrics/bucketing.py) so a long range
+        doesn't hand back thousands of raw rows to chart; omit it to get the
+        raw stored samples in range."""
+        if interval is not None and interval < 1:
+            raise HTTPException(status_code=400, detail="interval must be at least 1 second")
+        raw = metrics_store.query(since=since, until=until)
+        samples = bucket_samples(raw, interval) if interval else raw
+        return MetricsHistoryResponse(
+            samples=samples,
+            bucketed=bool(interval),
+            interval_seconds=interval,
+            since=since,
+            until=until,
+        ).model_dump()
 
     return app
 
