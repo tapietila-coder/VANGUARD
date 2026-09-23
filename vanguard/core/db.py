@@ -1,6 +1,7 @@
 """SQLite storage helper. Single-node reference implementation, same posture as Dispatch."""
 import json
 import os
+import shutil
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -87,6 +88,14 @@ CREATE TABLE IF NOT EXISTS health_probe (
     id INTEGER PRIMARY KEY,
     checked_at TEXT NOT NULL
 );
+
+-- NOTE: backup metadata (vanguard/backup/) is deliberately NOT a table here.
+-- A restore replaces this entire db file's contents with an older snapshot,
+-- which would silently roll back any backups-table rows written after that
+-- snapshot too (discovered for real while building vanguard/backup/ — see
+-- its module docstring). Backup metadata is instead stored as JSON sidecar
+-- files under backup_dir, next to each bundle, so it survives every restore
+-- of this db unaffected.
 """
 
 
@@ -122,6 +131,20 @@ class Database:
     def close(self) -> None:
         self._conn.close()
 
+    def backup_to_file(self, dest_path: str) -> None:
+        """Real SQLite online backup (`sqlite3.Connection.backup()`), not a
+        raw file copy — a raw copy of a live SQLite file under concurrent
+        writers can be corrupt (torn write mid-copy). Holds this Database's
+        lock for the whole step-by-step copy so no write interleaves with it,
+        the same consistency guarantee `cursor()` gives every other caller."""
+        with self._lock:
+            dest_conn = sqlite3.connect(dest_path)
+            try:
+                self._conn.backup(dest_conn)
+                dest_conn.commit()
+            finally:
+                dest_conn.close()
+
     def check_read_write(self) -> tuple[bool, str]:
         """Real, lightweight liveness check used by System Health: a real
         `SELECT 1` plus a real write (upsert) against a dedicated single-row
@@ -139,6 +162,33 @@ class Database:
             return True, f"SELECT 1 + write probe ok against {self.db_path}"
         except Exception as exc:  # noqa: BLE001 - report the real failure, never fabricate success
             return False, f"{exc.__class__.__name__}: {exc}"
+
+    def restore_from(self, source_path: str) -> None:
+        """Real restore support for vanguard/backup/manager.py: swap this
+        Database's live file with `source_path`'s contents, serialized under
+        the same lock every other read/write in this app goes through, so no
+        request already in flight can observe a half-copied file.
+
+        Honest, documented limitation: this only serializes against OTHER
+        users of THIS Database instance — which is every real read/write path
+        in this codebase (JobStore, AuditWriter, NodeInventory, etc. all take
+        the same `db` object). It does NOT protect against a second, separate
+        OS process holding its own connection to the same db file, which is
+        out of scope for VANGUARD's single-node reference posture (see
+        README's "What is NOT implemented").
+        """
+        with self._lock:
+            self._conn.close()
+            try:
+                shutil.copy2(source_path, self.db_path)
+            finally:
+                # Reopen no matter what: even if the copy failed, leaving
+                # self._conn closed would make every future request crash
+                # opaquely instead of surfacing the real copy error.
+                self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+                self._conn.row_factory = sqlite3.Row
+                self._conn.executescript(SCHEMA)
+                self._conn.commit()
 
 
 def dumps(obj) -> str:

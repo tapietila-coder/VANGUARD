@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..audit.writer import AuditWriter
+from ..backup.manager import BackupManager
 from ..nodeops.inventory import NodeInventory
 from ..process_control.manager import ProcessController
 from ..readiness.engine import ReadinessStore, evaluate
@@ -40,6 +41,7 @@ class JobDeps:
     readiness_store: ReadinessStore
     audit: AuditWriter
     export_dir: str
+    backups: BackupManager
 
 
 @dataclass
@@ -153,6 +155,19 @@ def audit_log_export(ctx: JobRunContext) -> dict[str, Any]:
     return {"exported_count": len(entries), "path": str(path)}
 
 
+def backup_create(ctx: JobRunContext) -> dict[str, Any]:
+    """Real backup of VANGUARD's own live SQLite db (vanguard/backup/manager.py):
+    a real `sqlite3.Connection.backup()` copy, zipped into a self-contained
+    bundle with real size/sha256 metadata. Restore is deliberately NOT a job
+    type — it's too destructive for the background queue; see the dedicated
+    synchronous `POST /backups/{id}/restore` API route instead."""
+    reason = str(ctx.params.get("reason", "manual"))
+    ctx.report_progress("running sqlite3 online backup + zipping bundle")
+    record = ctx.deps.backups.create_backup(reason=reason)
+    ctx.report_progress(f"backup written to {record.path}")
+    return record.model_dump()
+
+
 def queue_selftest(ctx: JobRunContext) -> dict[str, Any]:
     """A small, real, test-only job type: it actually runs on a worker thread
     for a short, configurable number of real 0.1s steps, really calling
@@ -177,5 +192,6 @@ JOB_REGISTRY: dict[str, JobCallable] = {
     "readiness_sweep": readiness_sweep,
     "service_health_check": service_health_check,
     "audit_log_export": audit_log_export,
+    "backup_create": backup_create,
     "queue_selftest": queue_selftest,
 }

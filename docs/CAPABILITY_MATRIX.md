@@ -24,7 +24,7 @@ NOT_CONNECTED/UNKNOWN) · **NONE** (nothing built).
 | Deployments / rollback | — | — | NONE | Not attempted |
 | Incidents / alerting | — | — | NONE | Not attempted; would likely correlate audit + readiness + job-failure events once those are richer |
 | Secrets management UI | — | — | NONE | Secrets are env-var only today (`.env`), no VANGUARD-level secrets surface |
-| Backups / restore | — | — | NONE | Not attempted; SQLite file backup would be the honest starting point |
+| Backups / restore | `vanguard/backup/` — real `sqlite3.Connection.backup()` bundles, JSON-sidecar metadata (not a db table — see manager.py docstring for the real bug that caused that choice), `backup_create` job type, synchronous checksum-verified restore with automatic pre-restore safety snapshot | `/backups` — list, Create Backup, per-row Restore/Delete behind the same confirm-before-disrupt pattern as Service Control | PARTIAL | Only backs up VANGUARD's own db, not `data/logs/` (skipped — real log files can be open/appended-to on Windows, needs its own rotation-aware handling); restore's connection-swap safety only serializes against requests sharing this process's one `Database` instance, not a second OS process independently holding the db file open; no scheduled/automatic backups |
 | RBAC / approvals | Bearer-token, single shared secret | — | STUB | No per-user roles; anyone with the token can do everything mutating routes allow |
 | Steward integration | `StewardAdapter` | Overview page shows real NOT_CONNECTED | STUB | Steward doesn't exist anywhere in this environment |
 | Watchtower integration | `WatchtowerAdapter` | Overview page shows real NOT_CONNECTED | STUB | Watchtower doesn't exist anywhere in this environment |
@@ -42,6 +42,7 @@ NOT_CONNECTED/UNKNOWN) · **NONE** (nothing built).
 4. Job Queue + Jobs UI — LIVE.
 5. Audit + Logs UI (`/audit`, `/logs`) — LIVE.
 6. System Health aggregate (`/system-health`) — LIVE.
+7. Backups / restore (`/backups`) — PARTIAL (see row above for the honest limitations).
 
 ## What this matrix deliberately does not claim
 

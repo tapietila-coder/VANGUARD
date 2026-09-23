@@ -38,6 +38,12 @@ class Settings:
     # reference service — not a distributed queue.
     job_worker_count: int = 2
     job_export_dir: str = "./data/exports"
+    # Backups: where real backup bundles land, and how many MANUAL backups to
+    # keep before older ones are pruned (safety snapshots taken automatically
+    # before a restore are not counted against this limit — see
+    # vanguard/backup/manager.py).
+    backup_dir: str = "./data/backups"
+    backup_retain_count: int = 10
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -66,6 +72,8 @@ class Settings:
             dispatch_python=dispatch_python,
             job_worker_count=int(os.getenv("VANGUARD_JOB_WORKERS", "2")),
             job_export_dir=os.getenv("VANGUARD_JOB_EXPORT_DIR", "./data/exports"),
+            backup_dir=os.getenv("VANGUARD_BACKUP_DIR", "./data/backups"),
+            backup_retain_count=int(os.getenv("VANGUARD_BACKUP_RETAIN_COUNT", "10")),
         )
 
     def validate(self) -> None:
@@ -75,3 +83,5 @@ class Settings:
             raise ValueError("mesh_provider must be 'null' or 'netbird'")
         if self.job_worker_count < 1:
             raise ValueError("job_worker_count must be at least 1")
+        if self.backup_retain_count < 1:
+            raise ValueError("backup_retain_count must be at least 1")
