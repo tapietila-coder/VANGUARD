@@ -27,6 +27,7 @@ const NAV = [
   { href: "/jobs", label: "JOBS" },
   { href: "/incidents", label: "INCIDENTS" },
   { href: "/backups", label: "BACKUPS" },
+  { href: "/metrics", label: "METRICS" },
   { href: "/audit", label: "AUDIT" },
   { href: "/logs", label: "LOGS" },
   { href: "/system-health", label: "SYSTEM HEALTH" },

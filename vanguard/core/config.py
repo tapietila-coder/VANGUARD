@@ -44,6 +44,11 @@ class Settings:
     # vanguard/backup/manager.py).
     backup_dir: str = "./data/backups"
     backup_retain_count: int = 10
+    # Metrics / observability: how often the background collector takes a real
+    # local CPU/RAM/disk sample, and how many days of samples to keep before
+    # older ones are pruned (see vanguard/metrics/collector.py).
+    metrics_interval_seconds: int = 30
+    metrics_retention_days: int = 7
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -74,6 +79,8 @@ class Settings:
             job_export_dir=os.getenv("VANGUARD_JOB_EXPORT_DIR", "./data/exports"),
             backup_dir=os.getenv("VANGUARD_BACKUP_DIR", "./data/backups"),
             backup_retain_count=int(os.getenv("VANGUARD_BACKUP_RETAIN_COUNT", "10")),
+            metrics_interval_seconds=int(os.getenv("VANGUARD_METRICS_INTERVAL_SECONDS", "30")),
+            metrics_retention_days=int(os.getenv("VANGUARD_METRICS_RETENTION_DAYS", "7")),
         )
 
     def validate(self) -> None:
@@ -85,3 +92,7 @@ class Settings:
             raise ValueError("job_worker_count must be at least 1")
         if self.backup_retain_count < 1:
             raise ValueError("backup_retain_count must be at least 1")
+        if self.metrics_interval_seconds < 5:
+            raise ValueError("metrics_interval_seconds must be at least 5")
+        if self.metrics_retention_days < 1:
+            raise ValueError("metrics_retention_days must be at least 1")

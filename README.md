@@ -170,7 +170,43 @@ See `VANGUARD_DISCOVERY.md` for the Mission-0 discovery pass this build is based
   click-through to `/incidents/[id]` for the full real timeline; a real "N
   open incidents" row also appears on `/system-health`, linking back to
   `/incidents`.
-- 82 pytest tests, all passing locally (see "Test results" below).
+- **Metrics / observability** (`vanguard/metrics/`): real local CPU/RAM/disk
+  sampling for the one machine VANGUARD runs on — not a distributed metrics
+  platform, no Prometheus/Grafana, no external time-series DB. A small
+  background thread (`MetricsCollector`, started/stopped from the FastAPI
+  lifespan handler, same "one dedicated worker thread" shape as everything
+  else long-running in this codebase) takes a real sample every
+  `VANGUARD_METRICS_INTERVAL_SECONDS` (default 30s): CPU% and RAM used/total
+  via `psutil` (the same optional dependency `vanguard/nodeops/detect.py`
+  already uses — left honestly `None`, never guessed, when psutil isn't
+  installed) and disk used/total for the volume holding VANGUARD's own data
+  directory via the stdlib `shutil.disk_usage()` (always available). **GPU
+  utilization/VRAM are deliberately not sampled** — there is no portable
+  stdlib/psutil way to read them, the same honest call `detect.py` already
+  made for GPU model/VRAM at node-registration time; this module does not
+  fabricate numbers that capability doesn't actually have. The very first
+  sample is taken synchronously when the collector starts, so `/metrics`
+  shows real data immediately on boot rather than after a full interval.
+  Retention is simple prune-on-insert: every insert deletes samples older
+  than `VANGUARD_METRICS_RETENTION_DAYS` (default 7) — a deliberate choice
+  over a separate scheduled sweep (see `vanguard/metrics/collector.py`'s
+  module docstring). New routes: `GET /metrics/current` (the most recent real
+  sample plus honest collector status — `sample` is `null` in the real
+  early-startup window before the first sample lands, never a fabricated
+  placeholder) and `GET /metrics/history?since=&until=&interval=` (real
+  stored samples in range, oldest-first; an optional `interval` in seconds
+  downsamples into that many real averaged buckets — `vanguard/metrics/
+  bucketing.py` — so a long range doesn't hand back thousands of raw rows;
+  omit it for raw samples). Both are unauthenticated reads, same posture as
+  every other list route. `system_health` gains a real `metrics` row
+  (`OK`/`DEGRADED`/`UNKNOWN` reflecting the collector's actual running state
+  and real sample count — never a static "collecting" claim independent of
+  whether the thread is actually alive). A new `/metrics` UI page (added to
+  the top nav) shows real current CPU/RAM/disk readouts, a real SVG
+  sparkline per metric (one polyline point per real sample — a series with
+  fewer than 2 real points honestly renders "not enough samples yet" instead
+  of a fabricated flat line), and a scrollable table of recent real samples.
+- 91 pytest tests, all passing locally (see "Test results" below).
 
 ## What is NOT implemented / not claimed
 
@@ -209,6 +245,14 @@ See `VANGUARD_DISCOVERY.md` for the Mission-0 discovery pass this build is based
   second OS process independently holding the db file open. No scheduled/
   automatic backups; every backup is operator-triggered (via the API/UI or a
   restore's own automatic pre-restore safety snapshot).
+- **Metrics only covers this one local machine's CPU/RAM/disk.** No GPU
+  utilization/VRAM (no portable stdlib/psutil way to read them honestly — see
+  `vanguard/metrics/collector.py`), no remote-node metrics, no
+  Prometheus/Grafana/external time-series DB, no alert thresholds on metrics
+  (that lives in Incidents/alerting, which correlates different real
+  signals). Retention is a simple prune-on-insert, not a precise scheduled
+  sweep; `GET /metrics/history`'s bucketing does plain averaging per fixed
+  time window, not a statistically-aware downsampling algorithm.
 
 ## Run it locally (PowerShell)
 
@@ -234,7 +278,7 @@ The API is then at `http://127.0.0.1:8788`. FastAPI's interactive docs are at
 ### Test results (this build)
 
 ```
-82 passed, 2 warnings in ~45-70s
+91 passed, 2 warnings in ~55-70s
 ```
 
 The 2 warnings are upstream FastAPI/Starlette deprecation notices unrelated to
@@ -267,6 +311,8 @@ GET /api/v1/vanguard/backups
 GET /api/v1/vanguard/backups/{id}
 GET /api/v1/vanguard/incidents?status=&severity=
 GET /api/v1/vanguard/incidents/{id}
+GET /api/v1/vanguard/metrics/current
+GET /api/v1/vanguard/metrics/history?since=&until=&interval=
 ```
 
 Mutating, require `Authorization: Bearer <VANGUARD_API_TOKEN>`:
@@ -320,6 +366,11 @@ worker-pool size and where `audit_log_export` writes its snapshots.
 land and how many manual/job-triggered ones are kept before the oldest are
 pruned; automatic pre-restore safety snapshots are exempt from that count.
 
+`VANGUARD_METRICS_INTERVAL_SECONDS` (default `30`) controls how often the
+real background collector samples CPU/RAM/disk; `VANGUARD_METRICS_RETENTION_DAYS`
+(default `7`) controls how many days of samples are kept (pruned on every
+insert — see `vanguard/metrics/collector.py`).
+
 `GET /jobs` returns a bare list of jobs. `GET /audit` returns
 `{"entries": [...], "total": <int>, "limit": <int>, "offset": <int>}` — a
 different shape from the other list routes, chosen so the `/audit` UI page
@@ -333,7 +384,7 @@ or full-text search.
 
 `vanguard/` = the installable package (`core`, `nodeops`, `readiness`,
 `service_map`, `process_control`, `jobs`, `mesh`, `integrations`, `audit`,
-`system_health`, `backup`, `incidents`, `api`). `tests/` = pytest suite.
+`system_health`, `backup`, `incidents`, `metrics`, `api`). `tests/` = pytest suite.
 `docs/` = architecture, mesh, readiness, and security notes.
 `VANGUARD_DISCOVERY.md` = the Mission-0 ground-truth audit this build is
 based on.

@@ -22,6 +22,8 @@ from ..incidents.store import IncidentStore
 from ..integrations.adapters import DispatchAdapter, MarshalAdapter, StewardAdapter, WatchtowerAdapter
 from ..jobs.queue import JobQueue
 from ..mesh.provider import MeshProvider
+from ..metrics.collector import MetricsCollector
+from ..metrics.store import MetricsStore
 from ..process_control.manager import ProcessController
 from ..readiness.engine import ReadinessStore
 from ..readiness.profiles import BUILTIN_PROFILES
@@ -191,6 +193,32 @@ def _audit_row(audit: AuditWriter) -> SystemHealthRow:
         )
 
 
+def _metrics_row(metrics: MetricsStore, collector: MetricsCollector) -> SystemHealthRow:
+    """Reuses the real collector state (is it actually running right now?)
+    and the real store (how many samples, how recent the latest one) — never
+    a fake "collecting" status independent of whether the background thread
+    is actually alive."""
+    count = metrics.count()
+    latest = metrics.latest()
+    if collector.is_running():
+        status = "OK"
+        detail = f"collecting every {collector.interval_seconds}s, {count} sample(s) stored"
+    elif count > 0:
+        # Real samples exist but the background thread isn't currently
+        # running (e.g. this process was constructed without the ASGI
+        # lifespan protocol ever starting it, or it was explicitly stopped) —
+        # worth flagging, since an operator relying on /metrics would want to
+        # know collection has stalled.
+        status = "DEGRADED"
+        detail = f"collector not running; {count} sample(s) previously collected"
+    else:
+        status = "UNKNOWN"
+        detail = "collector not running, no samples collected yet"
+    if latest is not None:
+        detail += f", last sample at {latest.sampled_at}"
+    return SystemHealthRow(subsystem="metrics", status=status, detail=detail, checked_at=_now())
+
+
 def _incidents_row(incidents: IncidentStore) -> SystemHealthRow:
     open_count = incidents.count_open()
     return SystemHealthRow(
@@ -214,6 +242,8 @@ def build_report(
     readiness_store: ReadinessStore,
     audit: AuditWriter,
     incidents: IncidentStore,
+    metrics: MetricsStore,
+    metrics_collector: MetricsCollector,
 ) -> SystemHealthReport:
     """Runs every real subsystem check right now and assembles the report.
     Never returns a cached/previous result — every row's checked_at is set
@@ -228,5 +258,6 @@ def build_report(
         _readiness_row(readiness_store),
         _audit_row(audit),
         _incidents_row(incidents),
+        _metrics_row(metrics, metrics_collector),
     ]
     return SystemHealthReport(rows=rows, generated_at=_now())

@@ -1,7 +1,7 @@
 # VANGUARD Capability Matrix
 
 Honest audit of every capability named in the 15-subsystem operations-command-center
-spec, against what actually exists in this codebase as of 2026-09-19. Updated after
+spec, against what actually exists in this codebase as of 2026-09-23. Updated after
 each vertical slice — do not let this drift from reality.
 
 Status legend: **LIVE** (real, verified, operator-usable) · **PARTIAL** (real backend,
@@ -31,7 +31,7 @@ NOT_CONNECTED/UNKNOWN) · **NONE** (nothing built).
 | Marshal integration | `MarshalAdapter` | Overview page shows real NOT_CONNECTED | STUB | Marshal doesn't exist anywhere in this environment |
 | Dispatch integration | `DispatchAdapter` — real `/health` probe | Overview page shows real live status | LIVE | Read-only; Service Control (above) now covers the write side for this one process |
 | Logs (centralized) | Per-service log files under `data/logs/` (via process_control), plus new `GET /logs` cross-service index (exists/size/last-modified/line-count per registered process) | `/logs` — pick any registered service, tail it, client-side substring filter on the loaded tail | LIVE | Only covers services registered with Service Control (just Dispatch today); no correlation IDs, no server-side full-text search — client-side substring filter on the currently-loaded tail only |
-| Metrics / observability | — | — | NONE | Not attempted; CPU/RAM/GPU exist in `nodeops` detection but aren't graphed anywhere |
+| Metrics / observability | `vanguard/metrics/` — real background collector (`MetricsCollector`, started/stopped from the FastAPI lifespan handler) samples real CPU%/RAM used-total (via `psutil`) and disk used-total (via stdlib `shutil.disk_usage()`) for this one machine on a configurable interval, storing real timestamped `MetricSample` rows; retention is prune-on-insert (`VANGUARD_METRICS_RETENTION_DAYS`, default 7 days) | `/metrics` — real current CPU/RAM/disk readouts, per-metric SVG sparklines (one point per real sample, honest "not enough samples yet" below 2 points), scrollable recent-samples table; added to top nav | LIVE | Local machine only — no remote-node metrics, no GPU utilization/VRAM (no portable stdlib/psutil way to read them honestly, same call `detect.py` already made for GPU model/VRAM), no Prometheus/Grafana/external time-series DB, no alert thresholds on metrics (Incidents/alerting correlates different real signals); `GET /metrics/history`'s `interval` bucketing is plain per-window averaging, not a statistically-aware downsampling algorithm |
 | System Health (aggregate) | `vanguard/system_health/` — real `GET /system-health` aggregation endpoint calling `db.check_read_write()`, `jobs.worker_status()`, `ProcessController.status()`, `MeshProvider.health()`, all four integration adapters, `ReadinessStore.all_latest()`, and `audit.count()` | `/system-health` — one dense row per subsystem, manual refresh, honest whole-page unreachable state | LIVE | Service Control row only reflects the one process registered today (Dispatch); Readiness row summarizes the 200 most-recent stored evaluations, not a full history; no push/streaming — an operator (or the manual refresh button) has to ask |
 
 ## Sequencing so far
@@ -44,6 +44,7 @@ NOT_CONNECTED/UNKNOWN) · **NONE** (nothing built).
 6. System Health aggregate (`/system-health`) — LIVE.
 7. Backups / restore (`/backups`) — PARTIAL (see row above for the honest limitations).
 8. Incidents / alerting (`/incidents`) — LIVE (see row above for the honest limitations).
+9. Metrics / observability (`/metrics`) — LIVE (see row above for the honest limitations).
 
 ## What this matrix deliberately does not claim
 

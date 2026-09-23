@@ -291,3 +291,35 @@ export interface Incident {
   occurrence_count: number;
   timeline: IncidentEvent[];
 }
+
+// Metrics / observability: mirrors vanguard/core/models.py's MetricSample/
+// MetricsCurrentResponse/MetricsHistoryResponse. Real local CPU/RAM/disk
+// samples for the one machine VANGUARD runs on — GPU is deliberately absent
+// (no portable way to sample it honestly; see vanguard/metrics/collector.py).
+export interface MetricSample {
+  schema_version: 1;
+  cpu_percent: number | null;
+  ram_used_mb: number | null;
+  ram_total_mb: number | null;
+  disk_used_mb: number;
+  disk_total_mb: number;
+  disk_path: string;
+  sampled_at: string;
+}
+
+export interface MetricsCurrentResponse {
+  schema_version: 1;
+  sample: MetricSample | null;
+  collector_running: boolean;
+  interval_seconds: number;
+  sample_count: number;
+}
+
+export interface MetricsHistoryResponse {
+  schema_version: 1;
+  samples: MetricSample[];
+  bucketed: boolean;
+  interval_seconds: number | null;
+  since: string | null;
+  until: string | null;
+}
