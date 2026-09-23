@@ -22,7 +22,7 @@ NOT_CONNECTED/UNKNOWN) · **NONE** (nothing built).
 | Media/Instagram ingestion | — | — | NONE | This capability lives in **CLASSIFIED's Reel Scout**, a separate project — not part of VANGUARD |
 | Repository sync / Expat integration | — | — | NONE | Expat exists as a separate real system; VANGUARD has no integration with it yet |
 | Deployments / rollback | — | — | NONE | Not attempted |
-| Incidents / alerting | — | — | NONE | Not attempted; would likely correlate audit + readiness + job-failure events once those are richer |
+| Incidents / alerting | `vanguard/incidents/` — real-time correlation wired directly into the existing state-transition points: `ReadinessStore.save()`, `ProcessController`'s status builder, `JobQueue`'s terminal-state update, `DispatchAdapter.status()` (never a periodic poll — see `detector.py`'s module docstring for why) | `/incidents`, `/incidents/[id]` — list (filterable by status/severity), Acknowledge/Resolve actions, full timeline, added to top nav; a real "N open incidents" row also appears on `/system-health` | LIVE | Correlation key is per-subsystem+target (e.g. `readiness:<node>:<profile>`, `service_control:<service_id>`) except Job Queue, which correlates per `job_type` only (not per job params) — two different failure *reasons* for the same job_type still land in one incident; the Dispatch CONNECTED→NOT_CONNECTED transition tracker is in-memory only and resets on process restart (documented, honest — a restart while Dispatch happens to be down never retroactively opens an incident for a transition it didn't witness); single shared operator identity for acknowledge (`"operator"`), same as every other mutating route |
 | Secrets management UI | — | — | NONE | Secrets are env-var only today (`.env`), no VANGUARD-level secrets surface |
 | Backups / restore | `vanguard/backup/` — real `sqlite3.Connection.backup()` bundles, JSON-sidecar metadata (not a db table — see manager.py docstring for the real bug that caused that choice), `backup_create` job type, synchronous checksum-verified restore with automatic pre-restore safety snapshot | `/backups` — list, Create Backup, per-row Restore/Delete behind the same confirm-before-disrupt pattern as Service Control | PARTIAL | Only backs up VANGUARD's own db, not `data/logs/` (skipped — real log files can be open/appended-to on Windows, needs its own rotation-aware handling); restore's connection-swap safety only serializes against requests sharing this process's one `Database` instance, not a second OS process independently holding the db file open; no scheduled/automatic backups |
 | RBAC / approvals | Bearer-token, single shared secret | — | STUB | No per-user roles; anyone with the token can do everything mutating routes allow |
@@ -43,6 +43,7 @@ NOT_CONNECTED/UNKNOWN) · **NONE** (nothing built).
 5. Audit + Logs UI (`/audit`, `/logs`) — LIVE.
 6. System Health aggregate (`/system-health`) — LIVE.
 7. Backups / restore (`/backups`) — PARTIAL (see row above for the honest limitations).
+8. Incidents / alerting (`/incidents`) — LIVE (see row above for the honest limitations).
 
 ## What this matrix deliberately does not claim
 
