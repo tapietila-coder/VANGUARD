@@ -260,3 +260,34 @@ export interface RestoreResult {
   verified_sha256: string;
   restored_at: string;
 }
+
+// Incidents / alerting: mirrors vanguard/core/models.py's
+// Incident/IncidentEvent. Real incidents correlated by
+// vanguard/incidents/detector.py from real readiness/Service
+// Control/Job Queue/Dispatch-integration failure signals — never fabricated.
+export type IncidentSeverity = "INFO" | "WARNING" | "DEGRADED" | "MAJOR" | "CRITICAL";
+export type IncidentStatus = "OPEN" | "ACKNOWLEDGED" | "RESOLVED";
+
+export interface IncidentEvent {
+  kind: string;
+  detail: string;
+  actor: string;
+  created_at: string;
+}
+
+export interface Incident {
+  schema_version: 1;
+  incident_id: string;
+  title: string;
+  severity: IncidentSeverity;
+  status: IncidentStatus;
+  source: string;
+  correlation_key: string;
+  first_seen: string;
+  last_seen: string;
+  resolved_at: string | null;
+  acknowledged_by: string | null;
+  acknowledged_at: string | null;
+  occurrence_count: number;
+  timeline: IncidentEvent[];
+}

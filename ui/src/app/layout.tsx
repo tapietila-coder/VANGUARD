@@ -25,6 +25,7 @@ const NAV = [
   { href: "/services", label: "SERVICES" },
   { href: "/readiness", label: "READINESS" },
   { href: "/jobs", label: "JOBS" },
+  { href: "/incidents", label: "INCIDENTS" },
   { href: "/backups", label: "BACKUPS" },
   { href: "/audit", label: "AUDIT" },
   { href: "/logs", label: "LOGS" },
